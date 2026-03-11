@@ -76,7 +76,8 @@ async function readDatabaseRecords(params: {
           return;
         }
         db.close();
-        resolve(keys.map((key, index) => ({ key, value: values[index] })));
+        const resolvedValues = values;
+        resolve(keys.map((key, index) => ({ key, value: resolvedValues[index] })));
       };
 
       keysReq.onsuccess = () => {

@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import { maybeMigrateLegacyStorage, resolveMatrixStoragePaths } from "./storage.js";
 
-const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() => vi.fn(async () => undefined));
+const maybeCreateMatrixMigrationSnapshotMock = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => undefined),
+);
 
 vi.mock("openclaw/plugin-sdk/matrix", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/matrix")>();

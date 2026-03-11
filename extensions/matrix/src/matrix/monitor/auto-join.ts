@@ -1,14 +1,14 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/matrix";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig } from "../../types.js";
+import type { MatrixConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 
 export function registerMatrixAutoJoin(params: {
   client: MatrixClient;
-  cfg: CoreConfig;
+  accountConfig: Pick<MatrixConfig, "autoJoin" | "autoJoinAllowlist">;
   runtime: RuntimeEnv;
 }) {
-  const { client, cfg, runtime } = params;
+  const { client, accountConfig, runtime } = params;
   const core = getMatrixRuntime();
   const logVerbose = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
@@ -16,11 +16,9 @@ export function registerMatrixAutoJoin(params: {
     }
     runtime.log?.(message);
   };
-  const autoJoin = cfg.channels?.["matrix"]?.autoJoin ?? "always";
+  const autoJoin = accountConfig.autoJoin ?? "always";
   const autoJoinAllowlist = new Set(
-    (cfg.channels?.["matrix"]?.autoJoinAllowlist ?? [])
-      .map((entry) => String(entry).trim())
-      .filter(Boolean),
+    (accountConfig.autoJoinAllowlist ?? []).map((entry) => String(entry).trim()).filter(Boolean),
   );
 
   if (autoJoin === "off") {

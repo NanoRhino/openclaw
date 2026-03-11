@@ -164,7 +164,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const startupMs = Date.now();
   const startupGraceMs = 0;
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
-  registerMatrixAutoJoin({ client, cfg, runtime });
+  registerMatrixAutoJoin({ client, accountConfig, runtime });
   const warnedEncryptedRooms = new Set<string>();
   const warnedCryptoMissingRooms = new Set<string>();
 

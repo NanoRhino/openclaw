@@ -1,7 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/matrix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig } from "../../types.js";
+import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
 type InviteHandler = (roomId: string, inviteEvent: unknown) => Promise<void>;
@@ -39,17 +39,13 @@ describe("registerMatrixAutoJoin", () => {
 
   it("joins all invites when autoJoin=always", async () => {
     const { client, getInviteHandler, joinRoom } = createClientStub();
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          autoJoin: "always",
-        },
-      },
+    const accountConfig: MatrixConfig = {
+      autoJoin: "always",
     };
 
     registerMatrixAutoJoin({
       client,
-      cfg,
+      accountConfig,
       runtime: {
         log: vi.fn(),
         error: vi.fn(),
@@ -69,18 +65,14 @@ describe("registerMatrixAutoJoin", () => {
       alias: "#other:example.org",
       alt_aliases: ["#else:example.org"],
     });
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: ["#allowed:example.org"],
-        },
-      },
+    const accountConfig: MatrixConfig = {
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["#allowed:example.org"],
     };
 
     registerMatrixAutoJoin({
       client,
-      cfg,
+      accountConfig,
       runtime: {
         log: vi.fn(),
         error: vi.fn(),
@@ -100,18 +92,40 @@ describe("registerMatrixAutoJoin", () => {
       alias: "#allowed:example.org",
       alt_aliases: ["#backup:example.org"],
     });
-    const cfg: CoreConfig = {
-      channels: {
-        matrix: {
-          autoJoin: "allowlist",
-          autoJoinAllowlist: [" #allowed:example.org "],
-        },
-      },
+    const accountConfig: MatrixConfig = {
+      autoJoin: "allowlist",
+      autoJoinAllowlist: [" #allowed:example.org "],
     };
 
     registerMatrixAutoJoin({
       client,
-      cfg,
+      accountConfig,
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as unknown as import("openclaw/plugin-sdk/matrix").RuntimeEnv,
+    });
+
+    const inviteHandler = getInviteHandler();
+    expect(inviteHandler).toBeTruthy();
+    await inviteHandler!("!room:example.org", {});
+
+    expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
+  });
+
+  it("uses account-scoped auto-join settings for non-default accounts", async () => {
+    const { client, getInviteHandler, joinRoom, getRoomStateEvent } = createClientStub();
+    getRoomStateEvent.mockResolvedValue({
+      alias: "#ops-allowed:example.org",
+      alt_aliases: [],
+    });
+
+    registerMatrixAutoJoin({
+      client,
+      accountConfig: {
+        autoJoin: "allowlist",
+        autoJoinAllowlist: ["#ops-allowed:example.org"],
+      },
       runtime: {
         log: vi.fn(),
         error: vi.fn(),
