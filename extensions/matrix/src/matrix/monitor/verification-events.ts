@@ -11,6 +11,7 @@ import {
 
 const MAX_TRACKED_VERIFICATION_EVENTS = 1024;
 const SAS_NOTICE_RETRY_DELAY_MS = 750;
+const VERIFICATION_EVENT_STARTUP_GRACE_MS = 30_000;
 
 type MatrixVerificationStage = "request" | "ready" | "start" | "cancel" | "done" | "other";
 
@@ -306,11 +307,23 @@ export function createMatrixVerificationEventRouter(params: {
   client: MatrixClient;
   logVerboseMessage: (message: string) => void;
 }) {
+  const routerStartedAtMs = Date.now();
   const routedVerificationEvents = new Set<string>();
   const routedVerificationSasFingerprints = new Set<string>();
   const routedVerificationStageNotices = new Set<string>();
   const verificationFlowRooms = new Map<string, string>();
   const verificationUserRooms = new Map<string, string>();
+
+  function shouldEmitVerificationEventNotice(event: MatrixRawEvent): boolean {
+    const eventTs =
+      typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
+        ? event.origin_server_ts
+        : null;
+    if (eventTs === null) {
+      return true;
+    }
+    return eventTs >= routerStartedAtMs - VERIFICATION_EVENT_STARTUP_GRACE_MS;
+  }
 
   function rememberVerificationRoom(roomId: string, event: MatrixRawEvent, flowId: string | null) {
     for (const candidate of resolveVerificationFlowCandidates({ event, flowId })) {
@@ -420,6 +433,12 @@ export function createMatrixVerificationEventRouter(params: {
     rememberVerificationRoom(roomId, event, signal.flowId);
 
     void (async () => {
+      if (!shouldEmitVerificationEventNotice(event)) {
+        params.logVerboseMessage(
+          `matrix: ignoring historical verification event room=${roomId} id=${event.event_id ?? "unknown"} type=${event.type ?? "unknown"}`,
+        );
+        return;
+      }
       const flowId = signal.flowId;
       const sourceEventId = trimMaybeString(event?.event_id);
       const sourceFingerprint = sourceEventId ?? `${senderId}:${event.type}:${flowId ?? "none"}`;

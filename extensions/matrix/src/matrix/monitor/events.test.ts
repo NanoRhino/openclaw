@@ -118,6 +118,56 @@ function createHarness(params?: {
 }
 
 describe("registerMatrixMonitorEvents verification routing", () => {
+  it("does not repost historical verification completions during startup catch-up", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));
+    try {
+      const { sendMessage, roomEventListener } = createHarness();
+
+      roomEventListener("!room:example.org", {
+        event_id: "$done-old",
+        sender: "@alice:example.org",
+        type: "m.key.verification.done",
+        origin_server_ts: Date.now() - 10 * 60 * 1000,
+        content: {
+          "m.relates_to": { event_id: "$req-old" },
+        },
+      });
+
+      await vi.runAllTimersAsync();
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still posts fresh verification completions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-14T13:10:00.000Z"));
+    try {
+      const { sendMessage, roomEventListener } = createHarness();
+
+      roomEventListener("!room:example.org", {
+        event_id: "$done-fresh",
+        sender: "@alice:example.org",
+        type: "m.key.verification.done",
+        origin_server_ts: Date.now(),
+        content: {
+          "m.relates_to": { event_id: "$req-fresh" },
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+      });
+      expect(getSentNoticeBody(sendMessage)).toContain(
+        "Matrix verification completed with @alice:example.org.",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards reaction room events into the shared room handler", async () => {
     const { onRoomMessage, sendMessage, roomEventListener } = createHarness();
 
