@@ -67,14 +67,33 @@ function resolveMatrixStringField(params: {
   accountValue?: string;
   scopedEnvValue?: string;
   globalEnvValue?: string;
+  includeBaseConfig?: boolean;
+  includeGlobalEnv?: boolean;
 }): string {
   return (
     params.accountValue ||
     params.scopedEnvValue ||
-    readMatrixBaseConfigField(params.matrix, params.field) ||
-    params.globalEnvValue ||
+    (params.includeBaseConfig === false
+      ? ""
+      : readMatrixBaseConfigField(params.matrix, params.field)) ||
+    (params.includeGlobalEnv === false ? "" : params.globalEnvValue) ||
     ""
   );
+}
+
+function resolveMatrixAccountAuthField(params: {
+  matrix: ReturnType<typeof resolveMatrixBaseConfig>;
+  field: Extract<MatrixConfigStringField, "userId" | "accessToken" | "password" | "deviceId">;
+  accountValue?: string;
+  scopedEnvValue?: string;
+  globalEnvValue?: string;
+  isDefaultAccount: boolean;
+}): string {
+  return resolveMatrixStringField({
+    ...params,
+    includeBaseConfig: params.isDefaultAccount,
+    includeGlobalEnv: params.isDefaultAccount,
+  });
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
@@ -248,36 +267,42 @@ export function resolveMatrixConfigForAccount(
     scopedEnvValue: scopedEnv.homeserver,
     globalEnvValue: globalEnv.homeserver,
   });
-  const userIdSource =
-    accountField("userId") ||
-    scopedEnv.userId ||
-    (normalizedAccountId === DEFAULT_ACCOUNT_ID
-      ? readMatrixBaseConfigField(matrix, "userId") || globalEnv.userId || ""
-      : "");
-  const userId = userIdSource;
+  const isDefaultAccount = normalizedAccountId === DEFAULT_ACCOUNT_ID;
+  const userId = resolveMatrixAccountAuthField({
+    matrix,
+    field: "userId",
+    accountValue: accountField("userId"),
+    scopedEnvValue: scopedEnv.userId,
+    globalEnvValue: globalEnv.userId,
+    isDefaultAccount,
+  });
   const accessToken =
-    resolveMatrixStringField({
+    resolveMatrixAccountAuthField({
       matrix,
       field: "accessToken",
       accountValue: accountField("accessToken"),
       scopedEnvValue: scopedEnv.accessToken,
       globalEnvValue: globalEnv.accessToken,
+      isDefaultAccount,
     }) || undefined;
   const password =
-    resolveMatrixStringField({
+    resolveMatrixAccountAuthField({
       matrix,
       field: "password",
       accountValue: accountField("password"),
       scopedEnvValue: scopedEnv.password,
       globalEnvValue: globalEnv.password,
+      isDefaultAccount,
     }) || undefined;
-  const deviceIdSource =
-    accountField("deviceId") ||
-    scopedEnv.deviceId ||
-    (normalizedAccountId === DEFAULT_ACCOUNT_ID
-      ? readMatrixBaseConfigField(matrix, "deviceId") || globalEnv.deviceId || ""
-      : "");
-  const deviceId = deviceIdSource || undefined;
+  const deviceId =
+    resolveMatrixAccountAuthField({
+      matrix,
+      field: "deviceId",
+      accountValue: accountField("deviceId"),
+      scopedEnvValue: scopedEnv.deviceId,
+      globalEnvValue: globalEnv.deviceId,
+      isDefaultAccount,
+    }) || undefined;
   const deviceName =
     resolveMatrixStringField({
       matrix,

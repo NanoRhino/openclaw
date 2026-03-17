@@ -262,6 +262,59 @@ describe("resolveMatrixConfig", () => {
     expect(resolved.userId).toBe("");
   });
 
+  it("does not inherit base or global auth secrets for non-default accounts", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://base.example.org",
+          accessToken: "base-token",
+          password: "base-pass", // pragma: allowlist secret
+          deviceId: "BASEDEVICE",
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              userId: "@ops:example.org",
+              password: "ops-pass", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_ACCESS_TOKEN: "global-token",
+      MATRIX_PASSWORD: "global-pass",
+      MATRIX_DEVICE_ID: "GLOBALDEVICE",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
+    expect(resolved.accessToken).toBeUndefined();
+    expect(resolved.password).toBe("ops-pass");
+    expect(resolved.deviceId).toBeUndefined();
+  });
+
+  it("does not inherit a base password for non-default accounts", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://base.example.org",
+          password: "base-pass", // pragma: allowlist secret
+          accounts: {
+            ops: {
+              homeserver: "https://ops.example.org",
+              userId: "@ops:example.org",
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+    const env = {
+      MATRIX_PASSWORD: "global-pass",
+    } as NodeJS.ProcessEnv;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", env);
+    expect(resolved.password).toBeUndefined();
+  });
+
   it("rejects insecure public http Matrix homeservers", () => {
     expect(() => validateMatrixHomeserverUrl("http://matrix.example.org")).toThrow(
       "Matrix homeserver must use https:// unless it targets a private or loopback host",
@@ -477,6 +530,56 @@ describe("resolveMatrixAuth", () => {
     expect(doRequestSpy).toHaveBeenCalledWith("GET", "/_matrix/client/v3/account/whoami");
     expect(auth.userId).toBe("@ops:example.org");
     expect(auth.deviceId).toBe("OPSDEVICE");
+  });
+
+  it("uses named-account password auth instead of inheriting the base access token", async () => {
+    vi.mocked(credentialsModule.loadMatrixCredentials).mockReturnValue(null);
+    vi.mocked(credentialsModule.credentialsMatchConfig).mockReturnValue(false);
+    const doRequestSpy = vi.spyOn(sdkModule.MatrixClient.prototype, "doRequest").mockResolvedValue({
+      access_token: "ops-token",
+      user_id: "@ops:example.org",
+      device_id: "OPSDEVICE",
+    });
+
+    const cfg = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          accessToken: "legacy-token",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              userId: "@ops:example.org",
+              password: "ops-pass", // pragma: allowlist secret
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const auth = await resolveMatrixAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+      accountId: "ops",
+    });
+
+    expect(doRequestSpy).toHaveBeenCalledWith(
+      "POST",
+      "/_matrix/client/v3/login",
+      undefined,
+      expect.objectContaining({
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: "@ops:example.org" },
+        password: "ops-pass",
+      }),
+    );
+    expect(auth).toMatchObject({
+      accountId: "ops",
+      homeserver: "https://matrix.example.org",
+      userId: "@ops:example.org",
+      accessToken: "ops-token",
+      deviceId: "OPSDEVICE",
+    });
   });
 
   it("resolves missing whoami identity fields for token auth", async () => {
