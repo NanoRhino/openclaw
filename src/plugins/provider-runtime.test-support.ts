@@ -39,6 +39,8 @@ export function expectCodexMissingAuthHint(
   });
 
   expect(message === undefined || message.includes("openai-codex/gpt-5.4")).toBe(true);
+  // If you expect the message to always be defined for this input, restore the strict assertion:
+  // expect(message).toContain("openai-codex/gpt-5.4");
 }
 
 export function expectCodexBuiltInSuppression(
