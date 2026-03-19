@@ -67,7 +67,7 @@ export async function shouldFilterReply(
   }
 
   try {
-    const model = filterCfg.model ?? "claude-3-5-haiku-latest";
+    const model = filterCfg.model ?? "claude-haiku-4-5";
 
     // Read API key from auth profiles
     const fs = require("node:fs");

@@ -91,7 +91,7 @@ export type AgentConfig = {
 
 export type ReplyFilterConfig = {
   enabled?: boolean;
-  /** Model to use for narration detection (default: claude-3-5-haiku-latest) */
+  /** Model to use for narration detection (default: claude-haiku-4-5) */
   model?: string;
   /** "exclude" = filter all except listed; "include" = only filter listed */
   mode?: "exclude" | "include";
