@@ -120,6 +120,28 @@ function resolveLoaderPackageRoot(
   });
 }
 
+function resolveLoaderPluginSdkPackageRoot(
+  params: LoaderModuleResolveParams & { modulePath: string },
+): string | null {
+  const cwd = params.cwd ?? path.dirname(params.modulePath);
+  const fromCwd = resolveOpenClawPackageRootSync({ cwd });
+  const fromExplicitHints =
+    params.argv1 || params.moduleUrl
+      ? resolveOpenClawPackageRootSync({
+          cwd,
+          ...(params.argv1 ? { argv1: params.argv1 } : {}),
+          ...(params.moduleUrl ? { moduleUrl: params.moduleUrl } : {}),
+        })
+      : null;
+  return (
+    fromCwd ??
+    fromExplicitHints ??
+    findNearestPluginSdkPackageRoot(path.dirname(params.modulePath)) ??
+    (params.cwd ? findNearestPluginSdkPackageRoot(params.cwd) : null) ??
+    findNearestPluginSdkPackageRoot(process.cwd())
+  );
+}
+
 function resolvePluginSdkAliasCandidateOrder(params: {
   modulePath: string;
   isProduction: boolean;
@@ -141,7 +163,7 @@ function listPluginSdkAliasCandidates(params: {
     modulePath: params.modulePath,
     isProduction: process.env.NODE_ENV === "production",
   });
-  const packageRoot = resolveLoaderPackageRoot(params);
+  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
   if (packageRoot) {
     const candidateMap = {
       src: path.join(packageRoot, "src", "plugin-sdk", params.srcFile),
@@ -280,12 +302,7 @@ function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): strin
 
 function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot =
-    resolveOpenClawPackageRootSync({
-      cwd: path.dirname(modulePath),
-    }) ??
-    findNearestPluginSdkPackageRoot(path.dirname(modulePath)) ??
-    findNearestPluginSdkPackageRoot(process.cwd());
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
   if (!packageRoot) {
     return [];
   }
