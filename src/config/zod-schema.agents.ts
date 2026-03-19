@@ -3,10 +3,22 @@ import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
+const ReplyFilterSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    model: z.string().optional(),
+    mode: z.enum(["exclude", "include"]).optional(),
+    exclude: z.array(z.string()).optional(),
+    include: z.array(z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentsSchema = z
   .object({
     defaults: z.lazy(() => AgentDefaultsSchema).optional(),
     list: z.array(AgentEntrySchema).optional(),
+    replyFilter: ReplyFilterSchema,
   })
   .strict()
   .optional();

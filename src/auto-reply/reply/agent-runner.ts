@@ -52,6 +52,7 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import { shouldFilterReply } from "./reply-filter.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -505,8 +506,20 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
+    // Reply filter: remove narration/meta-commentary from final payloads
+    const filteredPayloadArray: typeof payloadArray = [];
+    for (const p of payloadArray) {
+      if (p.text && (await shouldFilterReply(p.text, sessionKey, cfg.agents?.replyFilter))) {
+        continue;
+      }
+      filteredPayloadArray.push(p);
+    }
+    if (filteredPayloadArray.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
     const payloadResult = await buildReplyPayloads({
-      payloads: payloadArray,
+      payloads: filteredPayloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
       blockStreamingEnabled,

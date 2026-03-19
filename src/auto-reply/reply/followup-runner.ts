@@ -26,6 +26,7 @@ import {
   resolveOriginMessageTo,
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
+import { shouldFilterReply } from "./reply-filter.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -299,6 +300,22 @@ export function createFollowupRunner(params: {
         }
         return [{ ...payload, text: stripped.text }];
       });
+
+      // Reply filter: remove narration/meta-commentary from followup payloads
+      const filteredFollowup: typeof sanitizedPayloads = [];
+      for (const p of sanitizedPayloads) {
+        if (
+          p.text &&
+          (await shouldFilterReply(p.text, sessionKey, queued.run.config?.agents?.replyFilter))
+        ) {
+          continue;
+        }
+        filteredFollowup.push(p);
+      }
+      if (filteredFollowup.length === 0) {
+        return;
+      }
+
       const replyToChannel = resolveOriginMessageProvider({
         originatingChannel: queued.originatingChannel,
         provider: queued.run.messageProvider,
@@ -311,7 +328,7 @@ export function createFollowupRunner(params: {
       );
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
-        payloads: sanitizedPayloads,
+        payloads: filteredFollowup,
         replyToMode,
         replyToChannel,
       });
