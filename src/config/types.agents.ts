@@ -89,7 +89,20 @@ export type AgentConfig = {
   runtime?: AgentRuntimeConfig;
 };
 
+export type ReplyFilterConfig = {
+  enabled?: boolean;
+  /** Model to use for narration detection (default: claude-3-5-haiku-latest) */
+  model?: string;
+  /** "exclude" = filter all except listed; "include" = only filter listed */
+  mode?: "exclude" | "include";
+  /** Agent IDs to exclude from filtering */
+  exclude?: string[];
+  /** Agent IDs to include for filtering */
+  include?: string[];
+};
+
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  replyFilter?: ReplyFilterConfig;
 };

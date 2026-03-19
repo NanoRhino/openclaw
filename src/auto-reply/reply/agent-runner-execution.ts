@@ -422,6 +422,8 @@ export async function runAgentTurnWithFallback(params: {
                       blockStreamingEnabled: params.blockStreamingEnabled,
                       blockReplyPipeline,
                       directlySentBlockKeys,
+                      cfg: params.followupRun.run.config,
+                      sessionKey: params.sessionKey,
                     })
                   : undefined,
                 onBlockReplyFlush:

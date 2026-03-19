@@ -1,10 +1,12 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ReplyFilterConfig } from "../../config/types.agents.js";
 import { logVerbose } from "../../globals.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
+import { shouldFilterReply } from "./reply-filter.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -68,6 +70,8 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directlySentBlockKeys: Set<string>;
+  cfg?: { agents?: { replyFilter?: ReplyFilterConfig } };
+  sessionKey?: string;
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
     const { text, skip } = params.normalizeStreamingText(payload);
@@ -111,6 +115,18 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     if (normalized.isSilent && !blockHasMedia) {
+      return;
+    }
+
+    // Reply filter: skip narration/meta-commentary
+    if (
+      blockPayload.text &&
+      (await shouldFilterReply(
+        blockPayload.text,
+        params.sessionKey,
+        params.cfg?.agents?.replyFilter,
+      ))
+    ) {
       return;
     }
 
