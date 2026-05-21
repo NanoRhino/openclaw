@@ -852,11 +852,20 @@ export async function runPreparedReply(
     sessionLaneKey &&
     (laneSize > 0 || activeSessionIdForInterrupt)
   ) {
-    const cleared = clearCommandLane(sessionLaneKey);
-    const aborted = piRuntime?.abortEmbeddedPiRun(
-      activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
-    );
-    logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    // patch-007: suppress interrupt after delivery started.
+    // Channel extensions (e.g. wechat) set globalThis.__ocDeliveryStarted
+    // when an outbound send has already begun, so interrupting here would
+    // cause the user to see a partial reply followed by silence.
+    const _dsKey = sessionKey ?? sessionIdFinal;
+    if ((globalThis as { __ocDeliveryStarted?: Set<string> }).__ocDeliveryStarted?.has(_dsKey)) {
+      logVerbose(`Interrupt suppressed (delivery in progress): ${sessionLaneKey}`);
+    } else {
+      const cleared = clearCommandLane(sessionLaneKey);
+      const aborted = piRuntime?.abortEmbeddedPiRun(
+        activeSessionIdForInterrupt ?? preparedSessionState.sessionId,
+      );
+      logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
+    }
   }
   const agentHarnessPolicy = useFastReplyRuntime
     ? undefined
