@@ -285,9 +285,8 @@ function assertMainSessionAgentId(
   const normalized = normalizeAgentId(job.agentId);
   const normalizedDefault = normalizeAgentId(defaultAgentId);
   if (normalized !== normalizedDefault) {
-    throw new Error(
-      `cron: sessionTarget "main" is only valid for the default agent. Use sessionTarget "isolated" with payload.kind "agentTurn" for non-default agents (agentId: ${job.agentId})`,
-    );
+    // patch-006: allow non-default agents to use main target
+    return;
   }
 }
 
