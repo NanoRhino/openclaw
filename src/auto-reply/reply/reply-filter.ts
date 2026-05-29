@@ -188,7 +188,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
         accept: "application/json",
         body: JSON.stringify({
           anthropic_version: "bedrock-2023-05-31",
-          max_tokens: 4,
+          max_tokens: 1,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -217,7 +217,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
         },
         body: JSON.stringify({
           model,
-          max_tokens: 4,
+          max_tokens: 1,
           messages: [{ role: "user", content: prompt }],
         }),
         signal: AbortSignal.timeout(3000),
@@ -225,7 +225,9 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       const result = (await resp.json()) as { content?: Array<{ text?: string }> };
       answer = result?.content?.[0]?.text?.trim()?.toLowerCase();
     }
-    const shouldFilter = answer === "true";
+    // patch-004: LLM 输出可能是 "true\n\nthis is..."（max_tokens 截断 LLM 解释），
+    // 严格相等会漏识别，改用 startsWith。同时 max_tokens 也降到 1 双保险。
+    const shouldFilter = answer?.startsWith("true") ?? false;
     if (_replyFilterCache.size > 200) {
       const brClient = _replyFilterCache._brClient;
       _replyFilterCache.clear();
