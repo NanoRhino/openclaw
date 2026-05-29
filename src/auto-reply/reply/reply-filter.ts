@@ -247,10 +247,33 @@ export async function filterReplyText(
 ): Promise<FilterResult> {
   const filterCfg = _loadReplyFilterCfg();
   if (!filterCfg?.enabled) return { drop: false, text };
-  const agentId = sessionKey?.split(":")?.[1] ?? "main";
+  // FAIL-SAFE (patch-003): sessionKey 缺失时不再 fallback 成 "main"，让 filter 必跑
+  // 旧实现把 sessionKey 空 → "main" → 命中 exclude，结果给微信用户漏了 model reasoning
+  const agentId = sessionKey?.split(":")?.[1];
+
+  // === patch-003 telemetry (filter-bypass-suspect) ===
+  // 留证据：每次 chokepoint 触发时如果 sessionKey 缺失就 warn，方便定位是哪个上游路径传丢了
+  if (!agentId) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        msg: "filter-bypass-suspect: sessionKey missing at chokepoint",
+        sessionKey: sessionKey ?? null,
+        mode: filterCfg.mode,
+        textHead: typeof text === "string" ? text.slice(0, 80) : null,
+        ts: new Date().toISOString(),
+      }),
+    );
+  }
+  // === end telemetry ===
+
   const list = filterCfg.exclude ?? filterCfg.include ?? [];
-  if (filterCfg.mode === "exclude" && list.includes(agentId)) return { drop: false, text };
-  if (filterCfg.mode === "include" && !list.includes(agentId)) return { drop: false, text };
+  // agentId 为空时永远不命中 exclude，filter 必跑（fail-safe）
+  if (filterCfg.mode === "exclude" && agentId && list.includes(agentId))
+    return { drop: false, text };
+  // include 模式同理：sessionKey 空 → 视为不在白名单，filter 跑
+  if (filterCfg.mode === "include" && !(agentId && list.includes(agentId)))
+    return { drop: false, text };
   if (!text) return { drop: false, text };
   // NO_REPLY handling: smart strip instead of blind drop
   if (/\bNO_REPLY\b/.test(text)) {
