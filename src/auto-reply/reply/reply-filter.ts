@@ -1,9 +1,12 @@
-// patch-002: reply filter v5 (delivery chokepoint)
+// reply-filter v6 (delivery chokepoint, supersedes patch-004)
 //
 // Strips agent-internal narration / tool references / meta-summary paragraphs
 // from outbound text before they reach the channel handler. Two-phase filter:
 //  1. Fast regex reject per paragraph (no API call).
 //  2. LLM classification (Bedrock Haiku by default; Anthropic API fallback).
+//     The LLM is asked to return a small JSON object {"filter": true|false};
+//     parsing strips optional ```json fences and falls back to the legacy
+//     "true"-prefix heuristic if JSON.parse fails.
 //
 // Activation is gated by ~/.openclaw/reply-filter.json (or
 // $OPENCLAW_STATE_DIR/reply-filter.json). The agent-id is derived from the
@@ -129,7 +132,9 @@ Keep if: the text is a normal user-facing message in the user's language (Chines
 
 """
 {text}
-"""`;
+"""
+
+Reply with ONLY a JSON object: {"filter": true} or {"filter": false}. No explanation, no markdown fences, no surrounding text — just the raw JSON.`;
 
 async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Promise<boolean> {
   const cacheKey = text.trim().slice(0, 200);
@@ -188,7 +193,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
         accept: "application/json",
         body: JSON.stringify({
           anthropic_version: "bedrock-2023-05-31",
-          max_tokens: 1,
+          max_tokens: 30,
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -197,7 +202,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       };
       const res = await client.send(cmd);
       const body = JSON.parse(new TextDecoder().decode(res.body));
-      answer = body?.content?.[0]?.text?.trim()?.toLowerCase();
+      answer = body?.content?.[0]?.text?.trim();
     } else {
       const model = filterCfg.model ?? "claude-haiku-4-5";
       let apiKey = filterCfg.apiKey;
@@ -217,17 +222,36 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
         },
         body: JSON.stringify({
           model,
-          max_tokens: 1,
+          max_tokens: 30,
           messages: [{ role: "user", content: prompt }],
         }),
         signal: AbortSignal.timeout(3000),
       });
       const result = (await resp.json()) as { content?: Array<{ text?: string }> };
-      answer = result?.content?.[0]?.text?.trim()?.toLowerCase();
+      answer = result?.content?.[0]?.text?.trim();
     }
-    // patch-004: LLM 输出可能是 "true\n\nthis is..."（max_tokens 截断 LLM 解释），
-    // 严格相等会漏识别，改用 startsWith。同时 max_tokens 也降到 1 双保险。
-    const shouldFilter = answer?.startsWith("true") ?? false;
+    // v6: prefer JSON output {"filter": true|false}; strip optional markdown
+    // fences in case the model wraps the JSON. Fall back to the legacy
+    // "true"-prefix heuristic when the response is not a {"filter": ...}
+    // object — covers JSON.parse failures AND legitimate JSON like a bare
+    // `true`/`false` token (which parses but lacks the `filter` key).
+    const rawAnswer = (answer ?? "").trim();
+    const cleanedAnswer = rawAnswer
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    let shouldFilter: boolean | undefined;
+    try {
+      const parsed = JSON.parse(cleanedAnswer) as unknown;
+      if (parsed && typeof parsed === "object" && "filter" in parsed) {
+        shouldFilter = (parsed as { filter?: unknown }).filter === true;
+      }
+    } catch {
+      // fall through to legacy heuristic
+    }
+    if (shouldFilter === undefined) {
+      shouldFilter = cleanedAnswer.toLowerCase().startsWith("true");
+    }
     if (_replyFilterCache.size > 200) {
       const brClient = _replyFilterCache._brClient;
       _replyFilterCache.clear();
