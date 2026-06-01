@@ -316,7 +316,20 @@ export async function filterReplyText(
   if (text.trim().length < 10) return { drop: false, text };
   // Phase 1: fast regex reject per paragraph
   const paragraphs = text.split(/\n\n+/);
-  const afterRegex = paragraphs.filter((p) => !_fastReject(p.trim()));
+  // === v6.1 paragraph dedup (2026-06-02) ===
+  // Within a single LLM output, drop paragraphs that exactly match an earlier paragraph.
+  // Triggered by real cases (Mo 2026-06-01 08:18, accygnvhlv 2026-06-01 07:17) where LLM
+  // produced "draft + length-check + final" and both draft and final were sent to user.
+  // Threshold: paragraphs shorter than 20 chars are skipped (avoid killing short greetings).
+  const _v61SeenParagraphs = new Set<string>();
+  const _v61DedupedParagraphs = paragraphs.filter((p) => {
+    const key = p.trim();
+    if (key.length < 20) return true;
+    if (_v61SeenParagraphs.has(key)) return false;
+    _v61SeenParagraphs.add(key);
+    return true;
+  });
+  const afterRegex = _v61DedupedParagraphs.filter((p) => !_fastReject(p.trim()));
   if (afterRegex.length === 0) return { drop: true, text: "" };
   // Phase 2: LLM classification on surviving paragraphs
   if (filterCfg.llm !== false) {
