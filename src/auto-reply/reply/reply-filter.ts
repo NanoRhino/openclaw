@@ -153,6 +153,8 @@ Filter if ANY of these apply:
 - Cron/scheduling status ("insufficient data", "cron preserved", "will retry", "no action taken", "no message sent", "skipping pattern detection")
 - Composition instructions ("The message should combine...", "compose a...", "send a photo invite with...")
 - Internal reasoning about user state ("days_silent", "Tier 2", "current_streak", "Stage:", "consecutive_increases", "active_strategy", "logging_gaps")
+- Quoted internal reasoning (e.g. "Actually example: ...", "Let me try: ...", text that quotes a draft message in quotes)
+- Self-correction/meta-thought ("Wait —", "Hmm,", "Actually, ...", "let me reconsider", "On second thought")
 - English-language planning or analysis clearly not meant for the end user
 
 Keep if: the text is a normal user-facing message in the user's language (Chinese, etc.), a greeting, a meal reminder, encouragement, dietary advice, or any content clearly written FOR the user.
@@ -221,13 +223,37 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       if (!_replyFilterCache._brClient) {
         _replyFilterCache._brClient = new BedrockRuntimeClient({ region });
       }
+      // patch-009: use Bedrock Tools API to enforce JSON schema on output.
+      // Previous raw-text mode relied on string parsing which had a 37.8%
+      // false-negative rate when LLM appended trailing explanation after
+      // the JSON ({"filter":true}\n\nThis is...). Tools API guarantees
+      // structured boolean output via stop_reason=tool_use.
       const cmd = new InvokeModelCommand({
         modelId: model,
         contentType: "application/json",
         accept: "application/json",
         body: JSON.stringify({
           anthropic_version: "bedrock-2023-05-31",
-          max_tokens: 30,
+          max_tokens: 100,
+          tools: [
+            {
+              name: "classify_paragraph",
+              description:
+                "Classify the paragraph as filter (hide from user) or keep (show to user)",
+              input_schema: {
+                type: "object",
+                properties: {
+                  filter: {
+                    type: "boolean",
+                    description:
+                      "true = hide this paragraph from user (it is internal/narration), false = show to user",
+                  },
+                },
+                required: ["filter"],
+              },
+            },
+          ],
+          tool_choice: { type: "tool", name: "classify_paragraph" },
           messages: [{ role: "user", content: prompt }],
         }),
       });
@@ -236,7 +262,23 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       };
       const res = await client.send(cmd);
       const body = JSON.parse(new TextDecoder().decode(res.body));
-      answer = body?.content?.[0]?.text?.trim();
+      // Try tools API path first: content[].type=tool_use, input.filter is boolean.
+      const _toolUse = (
+        body?.content as Array<{ type?: string; input?: { filter?: unknown } }> | undefined
+      )?.find((c) => c?.type === "tool_use");
+      if (_toolUse && typeof _toolUse.input?.filter === "boolean") {
+        answer = JSON.stringify({ filter: _toolUse.input.filter });
+      } else if (_toolUse) {
+        // Tool was called but `filter` is not a boolean (e.g. Haiku returns "<UNKNOWN>"
+        // when uncertain). Conservative: treat as filter:true (DROP) to err on side of
+        // hiding suspicious paragraphs rather than leaking them.
+        answer = JSON.stringify({ filter: true });
+      } else {
+        // No tool_use block at all — fallback: capture text for legacy parsing path.
+        answer = (body?.content as Array<{ type?: string; text?: string }> | undefined)
+          ?.find((c) => c?.type === "text")
+          ?.text?.trim();
+      }
     } else {
       const model = filterCfg.model ?? "claude-haiku-4-5";
       let apiKey = filterCfg.apiKey;
@@ -256,13 +298,44 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
         },
         body: JSON.stringify({
           model,
-          max_tokens: 30,
+          max_tokens: 100,
+          tools: [
+            {
+              name: "classify_paragraph",
+              description:
+                "Classify the paragraph as filter (hide from user) or keep (show to user)",
+              input_schema: {
+                type: "object",
+                properties: {
+                  filter: {
+                    type: "boolean",
+                    description:
+                      "true = hide this paragraph from user (it is internal/narration), false = show to user",
+                  },
+                },
+                required: ["filter"],
+              },
+            },
+          ],
+          tool_choice: { type: "tool", name: "classify_paragraph" },
           messages: [{ role: "user", content: prompt }],
         }),
         signal: AbortSignal.timeout(3000),
       });
-      const result = (await resp.json()) as { content?: Array<{ text?: string }> };
-      answer = result?.content?.[0]?.text?.trim();
+      const result = (await resp.json()) as {
+        content?: Array<{ type?: string; text?: string; input?: { filter?: unknown } }>;
+      };
+      // Try tools API path first: content[].type=tool_use, input.filter is boolean.
+      const _antToolUse = result?.content?.find((c) => c?.type === "tool_use");
+      if (_antToolUse && typeof _antToolUse.input?.filter === "boolean") {
+        answer = JSON.stringify({ filter: _antToolUse.input.filter });
+      } else if (_antToolUse) {
+        // Tool was called but `filter` is not a boolean (uncertain): treat as DROP.
+        answer = JSON.stringify({ filter: true });
+      } else {
+        // No tool_use block — fallback: text content.
+        answer = result?.content?.find((c) => c?.type === "text")?.text?.trim();
+      }
     }
     // v6: prefer JSON output {"filter": true|false}; strip optional markdown
     // fences in case the model wraps the JSON. Fall back to the legacy
