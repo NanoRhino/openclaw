@@ -31,6 +31,7 @@ type ReplyFilterCfg = {
   model?: string;
   region?: string;
   apiKey?: string;
+  traceLog?: boolean;
 };
 
 type FilterResult = { drop: boolean; text: string };
@@ -115,6 +116,32 @@ const _replyFilterCache: Map<string, _ReplyFilterCacheEntry> & {
   _brClient?: unknown;
 } = new Map() as Map<string, _ReplyFilterCacheEntry> & { _brClient?: unknown };
 
+// === reply-filter v6 trace metadata (patch-008) ===
+// _classifyParagraph side-channel: each call writes here, wrapper reads it.
+type _ClassifyMeta = {
+  raw: string | null;
+  error: string | null;
+  ms: number;
+  cacheHit: boolean;
+  llmCalled: boolean;
+};
+let _lastClassifyMeta: _ClassifyMeta = {
+  raw: null,
+  error: null,
+  ms: 0,
+  cacheHit: false,
+  llmCalled: false,
+};
+function _resetClassifyMeta(): void {
+  _lastClassifyMeta = {
+    raw: null,
+    error: null,
+    ms: 0,
+    cacheHit: false,
+    llmCalled: false,
+  };
+}
+
 const _FILTER_PROMPT = `Classify this chatbot paragraph. Output ONLY "true" (filter) or "false" (keep).
 
 Filter if ANY of these apply:
@@ -137,12 +164,19 @@ Keep if: the text is a normal user-facing message in the user's language (Chines
 Reply with ONLY a JSON object: {"filter": true} or {"filter": false}. No explanation, no markdown fences, no surrounding text — just the raw JSON.`;
 
 async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Promise<boolean> {
+  const _t0 = Date.now();
+  _resetClassifyMeta();
   const cacheKey = text.trim().slice(0, 200);
   const cached = _replyFilterCache.get(cacheKey);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    _lastClassifyMeta.cacheHit = true;
+    _lastClassifyMeta.ms = Date.now() - _t0;
+    return cached;
+  }
   try {
     const prompt = _FILTER_PROMPT.replace("{text}", text.slice(0, 500));
     let answer: string | undefined;
+    _lastClassifyMeta.llmCalled = true;
     if ((filterCfg.provider ?? "bedrock") === "bedrock") {
       const model = filterCfg.model ?? "anthropic.claude-haiku-4-5-20250620-v1:0";
       const region = filterCfg.region ?? "us-east-1";
@@ -236,6 +270,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
     // object — covers JSON.parse failures AND legitimate JSON like a bare
     // `true`/`false` token (which parses but lacks the `filter` key).
     const rawAnswer = (answer ?? "").trim();
+    _lastClassifyMeta.raw = rawAnswer;
     const cleanedAnswer = rawAnswer
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/i, "")
@@ -258,10 +293,13 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       if (brClient) _replyFilterCache._brClient = brClient;
     }
     _replyFilterCache.set(cacheKey, shouldFilter);
+    _lastClassifyMeta.ms = Date.now() - _t0;
     return shouldFilter;
   } catch (e) {
     const err = e as Error;
     console.error("[reply-filter] LLM classify error:", err?.name, err?.message?.slice(0, 120));
+    _lastClassifyMeta.error = (err?.name ?? "Error") + ": " + (err?.message?.slice(0, 200) ?? "");
+    _lastClassifyMeta.ms = Date.now() - _t0;
     return false;
   }
 }
@@ -271,14 +309,61 @@ export async function filterReplyText(
   _cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined,
 ): Promise<FilterResult> {
+  const t0 = Date.now();
   const filterCfg = _loadReplyFilterCfg();
-  if (!filterCfg?.enabled) return { drop: false, text };
-  // FAIL-SAFE (patch-003): sessionKey 缺失时不再 fallback 成 "main"，让 filter 必跑
-  // 旧实现把 sessionKey 空 → "main" → 命中 exclude，结果给微信用户漏了 model reasoning
+  const inputText = typeof text === "string" ? text : "";
+  const inputLen = inputText.length;
+  const traceLogEnabled = filterCfg?.traceLog !== false;
   const agentId = sessionKey?.split(":")?.[1];
 
-  // === patch-003 telemetry (filter-bypass-suspect) ===
-  // 留证据：每次 chokepoint 触发时如果 sessionKey 缺失就 warn，方便定位是哪个上游路径传丢了
+  type PerParaEntry = {
+    i: number;
+    text: string;
+    len: number;
+    fastRejectHit: boolean;
+    llmCalled: boolean;
+    llmRaw: string | null;
+    llmDecision: boolean | null;
+    llmError: string | null;
+    llmMs: number | null;
+    cacheHit: boolean;
+    finalDecision: "drop" | "keep";
+  };
+  const perPara: PerParaEntry[] = [];
+
+  function emit(decision: string, outputText: string, paragraphCount: number): void {
+    if (!traceLogEnabled) return;
+    const keptCount = perPara.filter((p) => p.finalDecision === "keep").length;
+    const droppedCount = perPara.filter((p) => p.finalDecision === "drop").length;
+    console.log(
+      JSON.stringify({
+        level: "info",
+        msg: "reply-filter:trace",
+        ts: new Date().toISOString(),
+        sessionKey: sessionKey ?? null,
+        agentId: agentId ?? null,
+        mode: filterCfg?.mode ?? null,
+        enabled: !!filterCfg?.enabled,
+        decision,
+        inputText,
+        outputText,
+        inputLen,
+        outputLen: outputText.length,
+        paragraphCount,
+        keptCount,
+        droppedCount,
+        elapsedMs: Date.now() - t0,
+        perPara,
+      }),
+    );
+  }
+
+  if (!filterCfg?.enabled) {
+    emit("disabled", inputText, 0);
+    return { drop: false, text };
+  }
+
+  // === filter-bypass-suspect telemetry (kept) ===
   if (!agentId) {
     console.warn(
       JSON.stringify({
@@ -294,54 +379,133 @@ export async function filterReplyText(
   // === end telemetry ===
 
   const list = filterCfg.exclude ?? filterCfg.include ?? [];
-  // agentId 为空时永远不命中 exclude，filter 必跑（fail-safe）
-  if (filterCfg.mode === "exclude" && agentId && list.includes(agentId))
+  if (filterCfg.mode === "exclude" && agentId && list.includes(agentId)) {
+    emit("excluded", inputText, 0);
     return { drop: false, text };
-  // include 模式同理：sessionKey 空 → 视为不在白名单，filter 跑
-  if (filterCfg.mode === "include" && !(agentId && list.includes(agentId)))
+  }
+  if (filterCfg.mode === "include" && !(agentId && list.includes(agentId))) {
+    emit("included_passthrough", inputText, 0);
     return { drop: false, text };
-  if (!text) return { drop: false, text };
-  // NO_REPLY handling: smart strip instead of blind drop
+  }
+  if (!text) {
+    emit("kept_all", text, 0);
+    return { drop: false, text };
+  }
+
+  // NO_REPLY handling: smart strip instead of blind drop (logic unchanged)
   if (/\bNO_REPLY\b/.test(text)) {
-    if (/^\s*NO_REPLY\s*$/.test(text)) return { drop: true, text: "" };
+    if (/^\s*NO_REPLY\s*$/.test(text)) {
+      emit("dropped_all", "", 1);
+      return { drop: true, text: "" };
+    }
     const _nrParas = text.split(/\n\n+/).filter((p) => {
       const t = p.trim();
       if (/^\s*NO_REPLY\s*$/.test(t)) return false;
       if (/^(?:Wait|Hmm|Actually|Let me reconsider|On second thought)/i.test(t)) return false;
       return true;
     });
-    if (_nrParas.length === 0) return { drop: true, text: "" };
+    if (_nrParas.length === 0) {
+      emit("dropped_all", "", text.split(/\n\n+/).length);
+      return { drop: true, text: "" };
+    }
     text = _nrParas.join("\n\n");
   }
-  if (text.trim().length < 10) return { drop: false, text };
-  // Phase 1: fast regex reject per paragraph
+
+  if (text.trim().length < 10) {
+    emit("kept_all", text, 1);
+    return { drop: false, text };
+  }
+
+  // Phase 1: dedup + fast regex reject (logic unchanged, but record per-para trace)
   const paragraphs = text.split(/\n\n+/);
-  // === v6.1 paragraph dedup (2026-06-02) ===
-  // Within a single LLM output, drop paragraphs that exactly match an earlier paragraph.
-  // Triggered by real cases (Mo 2026-06-01 08:18, accygnvhlv 2026-06-01 07:17) where LLM
-  // produced "draft + length-check + final" and both draft and final were sent to user.
-  // Threshold: paragraphs shorter than 20 chars are skipped (avoid killing short greetings).
   const _v61SeenParagraphs = new Set<string>();
-  const _v61DedupedParagraphs = paragraphs.filter((p) => {
+  const survivors: { idx: number; p: string }[] = [];
+  paragraphs.forEach((p, idx) => {
     const key = p.trim();
-    if (key.length < 20) return true;
-    if (_v61SeenParagraphs.has(key)) return false;
-    _v61SeenParagraphs.add(key);
-    return true;
+    let dedup = false;
+    if (key.length >= 20) {
+      if (_v61SeenParagraphs.has(key)) {
+        dedup = true;
+      } else {
+        _v61SeenParagraphs.add(key);
+      }
+    }
+    const fastHit = !dedup && _fastReject(key);
+    if (dedup || fastHit) {
+      perPara.push({
+        i: idx,
+        text: p,
+        len: p.length,
+        fastRejectHit: fastHit,
+        llmCalled: false,
+        llmRaw: null,
+        llmDecision: null,
+        llmError: dedup ? "v6.1_dedup" : null,
+        llmMs: null,
+        cacheHit: false,
+        finalDecision: "drop",
+      });
+    } else {
+      survivors.push({ idx, p });
+    }
   });
-  const afterRegex = _v61DedupedParagraphs.filter((p) => !_fastReject(p.trim()));
-  if (afterRegex.length === 0) return { drop: true, text: "" };
-  // Phase 2: LLM classification on surviving paragraphs
+
+  if (survivors.length === 0) {
+    emit("dropped_all", "", paragraphs.length);
+    return { drop: true, text: "" };
+  }
+
+  // Phase 2: LLM classification on survivors (logic unchanged)
   if (filterCfg.llm !== false) {
     const results = await Promise.all(
-      afterRegex.map(async (p) => {
+      survivors.map(async ({ idx, p }) => {
         const shouldFilter = await _classifyParagraph(p.trim(), filterCfg);
+        const meta = { ..._lastClassifyMeta };
+        perPara.push({
+          i: idx,
+          text: p,
+          len: p.length,
+          fastRejectHit: false,
+          llmCalled: meta.llmCalled,
+          llmRaw: meta.raw,
+          llmDecision: shouldFilter,
+          llmError: meta.error,
+          llmMs: meta.ms,
+          cacheHit: meta.cacheHit,
+          finalDecision: shouldFilter ? "drop" : "keep",
+        });
         return shouldFilter ? null : p;
       }),
     );
     const kept = results.filter((p): p is string => p !== null);
-    if (kept.length === 0) return { drop: true, text: "" };
-    return { drop: false, text: kept.join("\n\n") };
+    perPara.sort((a, b) => a.i - b.i);
+    if (kept.length === 0) {
+      emit("dropped_all", "", paragraphs.length);
+      return { drop: true, text: "" };
+    }
+    const outText = kept.join("\n\n");
+    emit(kept.length === paragraphs.length ? "kept_all" : "partial", outText, paragraphs.length);
+    return { drop: false, text: outText };
   }
-  return { drop: false, text: afterRegex.join("\n\n") };
+
+  // No-LLM fallback: only fast-reject + dedup applied
+  survivors.forEach(({ idx, p }) => {
+    perPara.push({
+      i: idx,
+      text: p,
+      len: p.length,
+      fastRejectHit: false,
+      llmCalled: false,
+      llmRaw: null,
+      llmDecision: null,
+      llmError: null,
+      llmMs: null,
+      cacheHit: false,
+      finalDecision: "keep",
+    });
+  });
+  perPara.sort((a, b) => a.i - b.i);
+  const outText = survivors.map((s) => s.p).join("\n\n");
+  emit(survivors.length === paragraphs.length ? "kept_all" : "partial", outText, paragraphs.length);
+  return { drop: false, text: outText };
 }
