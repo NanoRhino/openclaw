@@ -12,6 +12,8 @@ import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -19,7 +21,14 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { channelRouteTarget, normalizeChannelRouteTarget } from "../../plugin-sdk/channel-route.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -27,6 +36,8 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -372,19 +383,89 @@ function shouldQueueCronAwareness(params: {
   );
 }
 
-function resolveCronAwarenessMainSessionKey(params: {
+// [patch-003 v2] Resolve the awareness sessionKey for cron announce delivery.
+// Exported for unit tests; production callers use it via queueCronAwarenessSystemEvent.
+// Previously injected awareness into agent:<agentId>:main, but NanoRhino
+// channel extensions (wechat/wecom) route real user chats through
+// channel-scoped session keys (agent:<agentId>:wechat:default:direct:<peerId>,
+// agent:<agentId>:wecom:direct:<userid>, etc.). When users replied to cron
+// pushes, the agent had no context. v2 looks up the active chat session
+// matching (channel, to) from the agent's session store, falling back to
+// the main session if no match is found.
+export function resolveCronAwarenessSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
-}): string {
-  return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
-    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+  delivery: SuccessfulDeliveryTarget;
+}): { sessionKey: string; reason: "active" | "fallback" } {
+  const fallback =
+    params.cfg.session?.scope === "global"
+      ? resolveMainSessionKey(params.cfg)
+      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+
+  // Need explicit channel + to to look up matching active session.
+  if (!params.delivery.to || !params.delivery.channel) {
+    return { sessionKey: fallback, reason: "fallback" };
+  }
+
+  try {
+    const storePath = resolveDefaultSessionStorePath(params.agentId);
+    const store = loadSessionStore(storePath);
+    if (!store) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+
+    const targetChannel = normalizeMessageChannel(params.delivery.channel);
+    if (!targetChannel) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+    const targetRoute = normalizeChannelRouteTarget({
+      channel: targetChannel,
+      to: params.delivery.to,
+      accountId: params.delivery.accountId,
+      threadId: params.delivery.threadId,
+    });
+    if (!targetRoute) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+    const targetToCanonical = channelRouteTarget(targetRoute);
+    if (!targetToCanonical) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+
+    for (const [sk, entry] of Object.entries(store)) {
+      const parsed = parseAgentSessionKey(sk);
+      if (!parsed || parsed.agentId !== params.agentId.toLowerCase()) continue;
+      if (isCronSessionKey(sk) || isAcpSessionKey(sk) || isSubagentSessionKey(sk)) continue;
+
+      const ctx = deliveryContextFromSession(entry);
+      if (!ctx) continue;
+
+      const ctxChannel = normalizeMessageChannel(ctx.channel ?? "");
+      if (!ctxChannel || ctxChannel !== targetChannel) continue;
+
+      const ctxRoute = normalizeChannelRouteTarget({
+        channel: ctxChannel,
+        to: ctx.to,
+        accountId: ctx.accountId,
+        threadId: ctx.threadId,
+      });
+      const ctxCanonical = ctxRoute ? channelRouteTarget(ctxRoute) : undefined;
+      if (!ctxCanonical || ctxCanonical !== targetToCanonical) continue;
+
+      return { sessionKey: sk, reason: "active" };
+    }
+  } catch {
+    return { sessionKey: fallback, reason: "fallback" };
+  }
+
+  return { sessionKey: fallback, reason: "fallback" };
 }
 
 async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
+  delivery: SuccessfulDeliveryTarget;
   deliveryIdempotencyKey: string;
   outputText?: string;
   synthesizedText?: string;
@@ -398,19 +479,25 @@ async function queueCronAwarenessSystemEvent(params: {
     return;
   }
 
+  const resolved = resolveCronAwarenessSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    delivery: params.delivery,
+  });
+
   try {
     const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
     enqueueSystemEvent(text, {
-      sessionKey: resolveCronAwarenessMainSessionKey({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      }),
+      sessionKey: resolved.sessionKey,
       contextKey: params.deliveryIdempotencyKey,
       trusted: false,
     });
+    await logCronDeliveryWarn(
+      `[cron:${params.jobId}] [patch-003 v2] awareness target: sessionKey=${resolved.sessionKey} reason=${resolved.reason}`,
+    );
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness (sessionKey=${resolved.sessionKey} reason=${resolved.reason}): ${formatErrorMessage(err)}`,
     );
   }
 }
@@ -717,6 +804,7 @@ export async function dispatchCronDelivery(
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
+          delivery,
           deliveryIdempotencyKey,
           outputText,
           synthesizedText,
