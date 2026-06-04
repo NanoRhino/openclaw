@@ -57,6 +57,9 @@ function _loadReplyFilterCfg(): ReplyFilterCfg | null {
 }
 
 function _fastReject(p: string): boolean {
+  // --- fast KEEP whitelist (patch-002 v12): protect weekly-report progress bars & URLs ---
+  if (/[▓░]{4,}/.test(p) && /(?:已走|kg|目标|→|Target|progress)/.test(p)) return false;
+  if (/nanorhino\.ai\/user\//.test(p)) return false;
   if (
     /(?:data\/|\.json|\.md|\.py|\.sh|baseDir|workspaceDir|scripts\/)/.test(p) &&
     !/^[>*\-]/.test(p)
