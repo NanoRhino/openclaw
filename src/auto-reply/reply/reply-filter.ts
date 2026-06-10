@@ -147,28 +147,30 @@ function _resetClassifyMeta(): void {
 
 const _FILTER_PROMPT = `Classify this chatbot paragraph. Output ONLY "true" (filter) or "false" (keep).
 
+Core test: is the assistant talking to ITSELF/the system (internal -> filter) or TO the user (user-facing -> keep)? A direct reply to something the user asked is user-facing EVEN IF it is about reminders/scheduling/how the assistant works.
+
 Filter if ANY of these apply:
 - Internal narration ("Let me check...", "Now I'll...", "Now I have everything needed...")
 - Tool/file references (data/, .json, .md, scripts/, baseDir, workspaceDir)
-- Internal reports ("已写入", "已保存", "saved to", "written to")
-- Delivery notices ("已通过微信回复", "already sent")
+- Internal reports ("\u5DF2\u5199\u5165", "\u5DF2\u4FDD\u5B58", "saved to", "written to")
+- Delivery notices ("\u5DF2\u901A\u8FC7\u5FAE\u4FE1\u56DE\u590D", "already sent")
 - Meta-summary ("Here's what I did", "Done. I...")
 - Cron/scheduling status ("insufficient data", "cron preserved", "will retry", "no action taken", "no message sent", "skipping pattern detection")
 - Composition instructions ("The message should combine...", "compose a...", "send a photo invite with...")
 - Internal reasoning about user state ("days_silent", "Tier 2", "current_streak", "Stage:", "consecutive_increases", "active_strategy", "logging_gaps")
 - Quoted internal reasoning (e.g. "Actually example: ...", "Let me try: ...", text that quotes a draft message in quotes)
-- Self-correction/meta-thought ("Wait —", "Hmm,", "Actually, ...", "let me reconsider", "On second thought")
+- Self-correction/meta-thought ("Wait \u2014", "Hmm,", "Actually, ...", "let me reconsider", "On second thought")
 - Third-person objective restatement of nutrition/meal data, NOT addressed to the user. Internal reasoning narrates data about the user in third person ("Lunch had 524 kcal, target is 1265. Remaining ~741 kcal", "Based on the data: lunch had 759 cal", "<Name> has consumed ~1463 kcal"); a real broadcast speaks TO the user in second person ("You've had...", "You've got ~590 kcal left").
 - Meta-narration of advice/messaging logic instead of the advice itself ("The suggestion points to adding veggies at dinner", "The reminder should encourage...", "This is a next_meal suggestion") - describing what to say rather than saying it.
 - English planning/analysis for a non-English user (user writes Chinese but this paragraph is an English data summary/analysis) - the real reply to that user is in their own language.
 
-Keep if: the text speaks TO the user (second person / imperative / warm display tone, often with emoji) - a greeting, meal reminder, encouragement, logged-meal card, progress bar, or dietary advice phrased AS advice ("go fat-free tonight", "try adding a veggie"). Meal/calorie NUMBERS alone do NOT make it internal: a user-facing card like "Breakfast logged! 111 kcal | Protein 5.8g" or "You've got ~1305 kcal for lunch" is KEEP. The test is voice/addressee, not the presence of numbers.
+Keep if: the text speaks TO the user (second person / imperative / warm display tone, often with emoji) - a greeting, meal reminder, encouragement, logged-meal card, progress bar, or dietary advice phrased AS advice ("go fat-free tonight", "try adding a veggie"). Meal/calorie NUMBERS alone do NOT make it internal: a user-facing card like "Breakfast logged! 111 kcal | Protein 5.8g" or "You've got ~1305 kcal for lunch" is KEEP. Also KEEP a direct conversational reply to something the user asked - INCLUDING explaining how reminders/scheduling/the assistant work when the user asked about it (e.g. user asks “你刚发的提醒原文是什么”, assistant replies “我给它的指令是…，你那边收到的是怎么写的?”). Such a reply is user-facing even though it mentions reminders/instructions/generation. The test is voice/addressee (who is spoken to), not the topic and not the presence of numbers.
 
 """
 {text}
 """
 
-Reply with ONLY a JSON object: {"filter": true} or {"filter": false}. No explanation, no markdown fences, no surrounding text — just the raw JSON.`;
+Reply with ONLY a JSON object: {"filter": true} or {"filter": false}. No explanation, no markdown fences, no surrounding text \u2014 just the raw JSON.`;
 
 async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Promise<boolean> {
   const _t0 = Date.now();
