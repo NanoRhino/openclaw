@@ -33,6 +33,7 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import { filterReplyText } from "./reply/reply-filter.js";
 import { runReplyPayloadSendingHook } from "./reply/reply-payload-sending-hook.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
@@ -556,7 +557,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
           if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
             return null;
           }
-          const deliverPayload = configuredBeforeDeliver
+          let deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
           if (
@@ -564,6 +565,19 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
             (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
           ) {
             return null;
+          }
+          // patch-002: reply filter (beforeDeliver). Mirrors the chokepoint in
+          // deliver.ts so dispatcher-level paths (typing/queue/foreground fence)
+          // see the same filtered text. Drops paragraphs flagged as internal.
+          if (deliverPayload.text) {
+            const _fr = await filterReplyText(
+              deliverPayload.text,
+              params.cfg,
+              finalized.SessionKey,
+            );
+            if (_fr.drop) return null;
+            deliverPayload = { ...deliverPayload, text: _fr.text };
+            if (!deliverPayload.text?.trim()) return null;
           }
           return deliverPayload;
         }
