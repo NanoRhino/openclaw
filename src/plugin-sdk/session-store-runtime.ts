@@ -9,6 +9,11 @@ export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js
 // append keyed by sessionKey. Goes through SessionManager.appendMessage path,
 // not raw JSONL writes.
 export { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+// human-handoff: mirror the user's OWN messages with real role:"user" (symmetric
+// to the assistant one above). Same resolve/idempotency/parentId-safe path, no
+// agent turn. So after a human takeover the agent reads the resumed conversation
+// exactly like normal inbound turns (correct role → correct reference handling).
+export { appendUserMessageToSessionTranscript } from "../config/sessions/transcript.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
