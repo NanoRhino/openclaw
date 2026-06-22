@@ -653,6 +653,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelContextTokens: readPiModelContextTokens(runtimeModel),
       modelContextWindow: runtimeModelWithContext.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      agentId: effectiveSkillAgentId, // patch-012: per-agent contextTokens cap
     });
     const effectiveModel = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
@@ -995,6 +996,7 @@ async function compactEmbeddedPiSessionDirectOnce(
         provider,
         modelId,
         model,
+        agentId: effectiveSkillAgentId, // patch-012: per-agent contextTokens cap
       });
       const resourceLoader = createEmbeddedPiResourceLoader({
         cwd: resolvedWorkspace,

@@ -90,6 +90,7 @@ export async function compactEmbeddedPiSession(
       modelContextTokens: readPiModelContextTokens(ceModel),
       modelContextWindow: ceRuntimeModel?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      agentId: agentIds.sessionAgentId, // patch-012: per-agent contextTokens cap
     }).tokens;
   }
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({

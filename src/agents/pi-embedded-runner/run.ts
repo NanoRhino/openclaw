@@ -603,6 +603,7 @@ export async function runEmbeddedPiAgent(
         }),
         modelId,
         runtimeModel,
+        agentId: workspaceResolution.agentId, // patch-012: per-agent contextTokens cap
       });
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
