@@ -64,4 +64,37 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("usageOnly skips the request payload record and logs only usage", async () => {
+    const lines: string[] = [];
+    const logger = createAnthropicPayloadLogger({
+      env: {
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG_USAGE_ONLY: "1",
+      },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+    if (!logger) {
+      throw new Error("expected logger");
+    }
+    const streamFn: StreamFn = ((model, __, options) => {
+      options?.onPayload?.({ messages: [] }, model);
+      return {} as never;
+    }) as StreamFn;
+    const wrapped = logger.wrapStreamFn(streamFn);
+    await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
+    // No "request" stage line written when usageOnly is on.
+    expect(lines.filter((l) => l.includes('"stage":"request"'))).toHaveLength(0);
+
+    // But usage stage still records.
+    logger.recordUsage([
+      { role: "assistant", usage: { input: 1, output: 2 } } as never,
+    ]);
+    const usageLines = lines.filter((l) => l.includes('"stage":"usage"'));
+    expect(usageLines).toHaveLength(1);
+  });
 });
