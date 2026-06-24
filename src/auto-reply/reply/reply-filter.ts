@@ -327,7 +327,7 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
           tool_choice: { type: "tool", name: "classify_paragraph" },
           messages: [{ role: "user", content: prompt }],
         }),
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(10000),
       });
       const result = (await resp.json()) as {
         content?: Array<{ type?: string; text?: string; input?: { filter?: unknown } }>;
