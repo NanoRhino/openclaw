@@ -1,11 +1,7 @@
 import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
-import {
-  buildInboundMediaNote,
-  buildPendingHandoffMediaNote,
-  clearPendingHandoffImages,
-} from "../media-note.js";
+import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
@@ -40,18 +36,7 @@ export function buildReplyPromptBodies(params: {
     .filter(Boolean)
     .join("\n\n");
   const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
-  const inboundMediaNote = buildInboundMediaNote(params.ctx);
-  // human-handoff: workspace/data/pending-handoff-images.json 里有未喂图就在 prompt 里拼
-  // `[media attached: <path> (mime) | <path>]` 让 openclaw 框架的 detectImageReferences
-  // 自动当图片视觉内容加载,跟用户当轮发图等价。注入后立即消费(清空 images)避免重复喂。
-  const handoffMediaNote = buildPendingHandoffMediaNote(params.ctx.MediaWorkspaceDir);
-  if (handoffMediaNote) {
-    clearPendingHandoffImages(params.ctx.MediaWorkspaceDir);
-  }
-  const mediaNote =
-    inboundMediaNote || handoffMediaNote
-      ? [inboundMediaNote, handoffMediaNote].filter(Boolean).join("\n")
-      : undefined;
+  const mediaNote = buildInboundMediaNote(params.ctx);
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
   const queuedBodyRaw = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
