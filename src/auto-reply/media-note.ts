@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
 
@@ -176,6 +178,87 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
         total: count,
         type: entry.type,
         url: entry.url,
+      }),
+    );
+  }
+  return lines.join("\n");
+}
+
+// ─── human-handoff: pending media injection ────────────────────────────────
+// 工作台/人工模式期间 wechat 插件下载的图片,写进 workspace/data/pending-handoff-images.json
+// (schema: {"images":[{"path":"/...","mime":"image/png"}, ...]}),用户切回机器模式后
+// 第一条消息进 agent 时,prompt-prelude 调本函数把这些图也拼成 [media attached: ...]
+// 注入 prompt,让 openclaw 框架的 detectImageReferences 当作"用户当轮发图"自动加载。
+// 文件名前缀 "[Handoff·attached image from coach: ...]" 让 agent 知道这是教练之前发的、
+// 不是用户当轮上传的。注入即消费,文件改成空 images 数组(保留外壳,简化删除竞态)。
+
+const PENDING_HANDOFF_FILE = "data/pending-handoff-images.json";
+
+export type PendingHandoffImage = { path: string; mime?: string };
+
+export function readPendingHandoffImages(workspaceDir: string | undefined): PendingHandoffImage[] {
+  if (!workspaceDir || !workspaceDir.trim()) return [];
+  const file = path.join(workspaceDir, PENDING_HANDOFF_FILE);
+  try {
+    if (!fs.existsSync(file)) return [];
+    const raw = fs.readFileSync(file, "utf-8");
+    const parsed = JSON.parse(raw) as { images?: unknown };
+    if (!Array.isArray(parsed.images)) return [];
+    return parsed.images
+      .map((e) => {
+        if (!e || typeof e !== "object") return undefined;
+        const p = (e as { path?: unknown }).path;
+        const m = (e as { mime?: unknown }).mime;
+        if (typeof p !== "string" || !p.trim()) return undefined;
+        return { path: p.trim(), mime: typeof m === "string" ? m.trim() : undefined };
+      })
+      .filter((e): e is PendingHandoffImage => Boolean(e));
+  } catch {
+    return [];
+  }
+}
+
+export function clearPendingHandoffImages(workspaceDir: string | undefined): void {
+  if (!workspaceDir || !workspaceDir.trim()) return;
+  const file = path.join(workspaceDir, PENDING_HANDOFF_FILE);
+  try {
+    if (!fs.existsSync(file)) return;
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ images: [] }, null, 2));
+    fs.renameSync(tmp, file);
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Returns a `[Handoff·attached image from coach: <path> (<mime>) | <path>]` block
+ * (one line per image) if the workspace has any pending handoff images, else undefined.
+ * The marker still matches openclaw's `[media attached: ...]` detector via the inner
+ * "attached image from coach: " pattern; we use the "Handoff·" prefix so the agent's
+ * text-side reading knows the image came from the human coach during the handoff,
+ * not from the user this turn.
+ */
+export function buildPendingHandoffMediaNote(
+  workspaceDir: string | undefined,
+): string | undefined {
+  const pending = readPendingHandoffImages(workspaceDir);
+  if (pending.length === 0) return undefined;
+  // 复用 formatMediaAttachedLine,但 prefix 改为 Handoff;detectImageReferences 仍能识别
+  // (它的正则 `\[media attached:` 在 pi-embedded-runner/run/images.ts 已被 detect)。
+  // 为兼容,直接用同款 [media attached: ...] 格式,在前面单独加一行 context 说明来源。
+  const count = pending.length;
+  const header =
+    count === 1
+      ? "[Handoff context: 1 image from your human coach (delivered earlier during handoff)]"
+      : `[Handoff context: ${count} images from your human coach (delivered earlier during handoff)]`;
+  const lines = [header];
+  for (const img of pending) {
+    lines.push(
+      formatMediaAttachedLine({
+        path: img.path,
+        type: img.mime ?? "image/png",
+        url: img.path,
       }),
     );
   }
