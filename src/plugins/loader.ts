@@ -497,8 +497,17 @@ function runPluginRegisterSync(
   }
 }
 
+// Process-global loader cache. Plugin module source is immutable at runtime,
+// so the jiti loaders (keyed by `${loaderFilename}::{tryNative,aliasMap}`, where
+// aliasMap already encodes pluginSdkResolution) are safe to reuse across every
+// registry load. Creating a fresh cache per call retained one loader set — and
+// its cache-key strings — per load, which leaked ~hundreds of copies of every
+// plugin module graph. Mirrors the module-level singleton used by the other
+// plugin module-loader callers (public-surface-loader.ts, setup-registry.ts, …).
+const pluginModuleLoaderCache: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+  const moduleLoaders = pluginModuleLoaderCache;
   const createLoaderForModule = (modulePath: string) => {
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
