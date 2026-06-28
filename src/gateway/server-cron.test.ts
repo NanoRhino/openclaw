@@ -723,7 +723,15 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("falls back to the configured default agent main session for unknown agent-prefixed keys", () => {
+  it("preserves the requested agentId for agent-prefixed keys not in the runtime snapshot", () => {
+    // Previously this asserted a fallback to the default agent's main session
+    // when the requested agentId wasn't in the runtime config — but that
+    // fallback was masking a real bug: dynamically-registered agents (e.g.
+    // wechat-dm-*) that are added to openclaw.json after gateway startup
+    // wouldn't be in the snapshot yet, so legitimate wake/enqueue requests
+    // for them were silently rerouted onto the default agent. With the fix,
+    // cron trusts the requested agentId; if it's truly unknown, downstream
+    // resolution (workspace/auth) uses sensible per-id defaults.
     const cfg = {
       session: { mainKey: "main" },
       cron: {
@@ -773,11 +781,11 @@ describe("buildGatewayCronService", () => {
       const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
       const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-        "agent:primary:main",
+        "agent:ghost:discord:channel:ops",
       );
       const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
-      expect(wakeRequest?.agentId).toBe("primary");
-      expect(wakeRequest?.sessionKey).toBe("agent:primary:main");
+      expect(wakeRequest?.agentId).toBe("ghost");
+      expect(wakeRequest?.sessionKey).toBe("agent:ghost:discord:channel:ops");
     } finally {
       state.cron.stop();
     }
@@ -1168,6 +1176,58 @@ describe("buildGatewayCronService", () => {
         to: undefined,
         accountId: undefined,
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  // Regression: when an agent is registered dynamically (e.g. wechat-dm-*
+  // added to openclaw.json after gateway startup), the runtime config snapshot
+  // can lag behind disk until the next restart. Previously, cron's
+  // resolveCronAgent looked up the requested agent in the snapshot and fell
+  // back to resolveDefaultAgentId (typically "main") when the lookup failed —
+  // silently rerouting the job onto a different (potentially privileged) agent.
+  // After the fix, cron trusts the requested agentId from the job and only
+  // uses the snapshot to layer per-agent overrides.
+  it("does not reroute isolated cron jobs to the default agent when the requested agent is missing from the runtime snapshot", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-dynamic-agent-${Date.now()}`);
+    const startupCfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(tmpDir, "cron.json") },
+      agents: {
+        defaults: { workspace: path.join(tmpDir, "workspace") },
+        // Startup config has only "main" — the dynamic wechat-dm agent isn't
+        // here yet, mirroring a brand-new agent registered after restart.
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+    // Runtime reload config sees the dynamic agent on disk but it's still not
+    // exactly the scenario that matters; the bug bites when neither snapshot
+    // has the entry. Keep runtime config without the dynamic agent too.
+    loadConfigMock.mockReturnValue(startupCfg);
+
+    const state = buildGatewayCronService({
+      cfg: startupCfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "dynamic-agent-job",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        agentId: "wechat-dm-acctest123",
+        payload: { kind: "agentTurn", message: "noop" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      // Before the fix this asserted "main"; now it must preserve the
+      // requested agent so reply-filter sees the correct sessionKey prefix
+      // and per-user filtering rules apply.
+      expectIsolatedRunFields({ agentId: "wechat-dm-acctest123" });
     } finally {
       state.cron.stop();
     }
