@@ -280,10 +280,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
-  it("restarts heartbeat when agents.list entries change", () => {
+  it("hot-reloads agents.list without restarting heartbeat", () => {
+    // agents.list changes (dynamic agent registration) must hot-refresh the
+    // runtime snapshot so cron/scheduler lookups see new entries — but must
+    // NOT restart heartbeat on every append.  Concurrent registrations would
+    // otherwise put heartbeat in a restart loop. See ReloadRule comment in
+    // config-reload-plan.ts; backend-service memory cron-agent-misroute-
+    // thinking-leak documents the 2026-06-28 incident.
     const plan = buildGatewayReloadPlan(["agents.list"]);
     expect(plan.restartGateway).toBe(false);
-    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.restartHeartbeat).toBe(false);
     expect(plan.hotReasons).toContain("agents.list");
     expect(plan.noopPaths).toStrictEqual([]);
   });
@@ -437,7 +443,7 @@ describe("buildGatewayReloadPlan", () => {
       path: "agents.list",
       expectRestartGateway: false,
       expectHotPath: "agents.list",
-      expectRestartHeartbeat: true,
+      expectRestartHeartbeat: false,
     },
     {
       path: "mcp.servers.context7",

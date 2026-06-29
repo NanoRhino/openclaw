@@ -93,9 +93,23 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     actions: ["restart-heartbeat"],
   },
   {
+    // agents.list changes (appending new entries via dynamic registration) must
+    // refresh the runtime snapshot — otherwise cron/scheduler lookups against
+    // the snapshot's agent list will miss newly-registered agents (e.g. wechat
+    // dynamic agents added by casWriteAgents) and silently reroute their jobs
+    // onto the default agent. See backend-service memory:
+    // cron-agent-misroute-thinking-leak (2026-06-28 production incident).
+    //
+    // Do NOT restart heartbeat here: with bursts of new wechat users registering
+    // concurrently this previously caused a CPU loop (each dynamic-agent write
+    // re-triggered the snapshot refresh which re-triggered heartbeat restart).
+    // Heartbeat reads the runtime config on each tick, so simply refreshing the
+    // snapshot is enough — no restart needed for a list append. The historical
+    // CPU-loop mitigation was to disable reload entirely (gateway.reload.mode
+    // "off"); the cleaner fix is just to not restart heartbeat on list appends.
     prefix: "agents.list",
     kind: "hot",
-    actions: ["restart-heartbeat"],
+    actions: [],
   },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
