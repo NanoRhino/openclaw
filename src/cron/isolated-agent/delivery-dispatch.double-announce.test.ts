@@ -74,6 +74,10 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
 
+vi.mock("../../config/sessions/transcript.js", () => ({
+  appendAssistantMessageToSessionTranscript: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: maybeApplyTtsToPayloadMock,
 }));
@@ -91,6 +95,7 @@ vi.mock("./subagent-followup.runtime.js", () => ({
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { callGateway } from "../../gateway/call.runtime.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -453,9 +458,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("queues main-session awareness for isolated cron jobs with explicit delivery targets", async () => {
+  it("persists cron awareness to session transcript for isolated cron jobs with explicit delivery targets", async () => {
+    // [patch-003 v4] Cron awareness is now persisted as an assistant message in
+    // the resolved session's transcript (so the agent treats it as something it
+    // said) rather than queued as a one-shot system event. See queueCronAwareness
+    // SystemEvent in delivery-dispatch.ts.
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(appendAssistantMessageToSessionTranscript).mockClear();
 
     const params = makeBaseParams({
       synthesizedText: "Morning briefing complete.",
@@ -467,11 +477,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
-      sessionKey: "agent:main:main",
-      contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      trusted: false,
-    });
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        text: "Morning briefing complete.",
+        idempotencyKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
+      }),
+    );
+    // Old v2 enqueueSystemEvent path retired — must not be called.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("skips main-session awareness for isolated cron jobs with implicit delivery targets", async () => {
