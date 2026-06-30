@@ -59,7 +59,10 @@ describe("resolvePreparedReplyQueueState", () => {
     });
   });
 
-  it("returns shutdown reply only after exhausting retries when still busy", async () => {
+  it("returns shutdown reply when still active after a single wait (reset 兜底)", async () => {
+    // patch-010 的多次重试已废弃:连发 interrupt 改走 enqueue-followup + drain,
+    // 不再经过这里。此函数现在只剩 reset(/new、/reset)会走到,保留框架原始的
+    // "等一次仍 active 才保底提示"语义 —— reset 低频用户主动操作,极少触发。
     const waitForActiveRunEnd = vi.fn(async () => undefined);
     const result = await resolvePreparedReplyQueueState({
       activeRunQueueAction: "run-now",
@@ -75,49 +78,15 @@ describe("resolvePreparedReplyQueueState", () => {
         isActive: true,
         isStreaming: false,
       }),
-      maxShutdownRetries: 3,
     });
 
-    // 1 initial wait + 3 retries = 4 waits before giving up
-    expect(waitForActiveRunEnd).toHaveBeenCalledTimes(4);
+    // 只等一次,不再重试
+    expect(waitForActiveRunEnd).toHaveBeenCalledOnce();
     expect(result).toEqual({
       kind: "reply",
       reply: {
         text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
       },
-    });
-  });
-
-  it("continues once a retry observes the run has drained (patch-010)", async () => {
-    // active on first check, then drained on the retry → should continue, not error
-    let calls = 0;
-    const resolveBusyState = vi.fn(() => {
-      calls += 1;
-      return {
-        activeSessionId: calls < 2 ? "session-after-wait" : undefined,
-        isActive: calls < 2,
-        isStreaming: false,
-      };
-    });
-    const waitForActiveRunEnd = vi.fn(async () => undefined);
-
-    const result = await resolvePreparedReplyQueueState({
-      activeRunQueueAction: "run-now",
-      activeSessionId: "session-active",
-      queueMode: "interrupt",
-      sessionKey: "session-key",
-      sessionId: "session-1",
-      abortActiveRun: vi.fn(() => true),
-      waitForActiveRunEnd,
-      refreshPreparedState: vi.fn(async () => undefined),
-      resolveBusyState,
-      maxShutdownRetries: 3,
-    });
-
-    expect(waitForActiveRunEnd).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({
-      kind: "continue",
-      busyState: { activeSessionId: undefined, isActive: false, isStreaming: false },
     });
   });
 });
