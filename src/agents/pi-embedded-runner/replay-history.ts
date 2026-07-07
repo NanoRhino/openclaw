@@ -281,6 +281,41 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
   );
 }
 
+// patch-025: rewrite a transcript-mirror assistant entry into a plain-text
+// assistant turn suitable for replay. Keeps text blocks only (drops thinking,
+// tool_use, tool_result, images) and clears the openclaw provider/model tags
+// so downstream sanitizers no longer identify this as transcript-only.
+// Returns null when there is no meaningful text to preserve.
+function coerceTranscriptMirrorToPlainAssistantTurn(message: AgentMessage): AgentMessage | null {
+  const raw = (message as { content?: unknown }).content;
+  const texts: string[] = [];
+  if (typeof raw === "string") {
+    if (raw.trim()) {
+      texts.push(raw);
+    }
+  } else if (Array.isArray(raw)) {
+    for (const block of raw) {
+      if (!block || typeof block !== "object") continue;
+      if ((block as { type?: unknown }).type !== "text") continue;
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === "string" && text.trim()) {
+        texts.push(text);
+      }
+    }
+  }
+  if (texts.length === 0) {
+    return null;
+  }
+  const rewritten = { ...(message as Record<string, unknown>) };
+  rewritten.content = texts.map((text) => ({ type: "text", text }));
+  delete rewritten.provider;
+  delete rewritten.model;
+  delete rewritten.api;
+  delete rewritten.usage;
+  delete rewritten.stopReason;
+  return rewritten as unknown as AgentMessage;
+}
+
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
   const strippedText = stripInboundMetadata(replayContent);
   if (!strippedText.trim()) {
@@ -343,8 +378,17 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       continue;
     }
     if (isTranscriptOnlyOpenclawAssistant(message)) {
-      // Drop from the in-memory replay copy; the persisted JSONL keeps the
-      // entry so user-facing transcript surfaces are unchanged.
+      // patch-025: keep transcript-mirror text in replay so the agent sees
+      // what a cron/gateway-injected turn actually said to the user. Otherwise
+      // the user's next reply lands with no antecedent context ("那是上周二吧"
+      // → agent has no idea what "那" refers to). Strip usage/thinking/tool
+      // blocks and the openclaw provider/model tags so the message rejoins
+      // the normal assistant-turn path (downstream sanitizers no longer
+      // recognize it as transcript-only and won't drop it again).
+      const rewritten = coerceTranscriptMirrorToPlainAssistantTurn(message);
+      if (rewritten) {
+        out.push(rewritten);
+      }
       touched = true;
       continue;
     }

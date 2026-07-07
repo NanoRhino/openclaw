@@ -168,7 +168,12 @@ describe("normalizeAssistantReplayContent", () => {
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
-  it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {
+  it("preserves openclaw delivery-mirror and gateway-injected text in replay as plain assistant turns (patch-025)", () => {
+    // Before patch-025: transcript mirrors were dropped from replay, so when
+    // a user reacted to a cron-delivered message the agent had no antecedent
+    // context ("那是上周二吧" → "啥是上周二?"). We now keep the visible text
+    // and strip the openclaw provider/model tags so downstream sanitizers
+    // treat it as an ordinary assistant turn.
     const messages = [
       userMessage("hello"),
       openclawTranscriptAssistant("delivery-mirror"),
@@ -176,9 +181,47 @@ describe("normalizeAssistantReplayContent", () => {
       openclawTranscriptAssistant("gateway-injected"),
     ];
     const out = normalizeAssistantReplayContent(messages);
-    expect(out).toHaveLength(2);
+    expect(out).toHaveLength(4);
     expect((out[0] as { role: string }).role).toBe("user");
-    expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
+    const mirror = out[1] as {
+      role: string;
+      content: { type: string; text: string }[];
+      provider?: unknown;
+      model?: unknown;
+    };
+    expect(mirror.role).toBe("assistant");
+    expect(mirror.content).toEqual([{ type: "text", text: "channel mirror" }]);
+    expect(mirror.provider).toBeUndefined();
+    expect(mirror.model).toBeUndefined();
+    expect((out[2] as { provider: string }).provider).toBe("amazon-bedrock");
+    // Trailing gateway-injected mirror is preserved and content-normalized too.
+    const trailing = out[3] as {
+      role: string;
+      content: { type: string; text: string }[];
+      provider?: unknown;
+    };
+    expect(trailing.role).toBe("assistant");
+    expect(trailing.content).toEqual([{ type: "text", text: "channel mirror" }]);
+    expect(trailing.provider).toBeUndefined();
+  });
+
+  it("drops transcript-mirror entries whose text is empty (patch-025)", () => {
+    // A mirror with no meaningful text has no context to preserve; dropping
+    // it avoids leaving a bare zero-content assistant turn in the replay.
+    const emptyMirror = {
+      role: "assistant",
+      content: [{ type: "text", text: "   " }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as AgentMessage;
+    const messages = [userMessage("hi"), emptyMirror, userMessage("still there?")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toHaveLength(2);
+    expect((out[0] as { content: string }).content).toBe("hi");
+    expect((out[1] as { content: string }).content).toBe("still there?");
   });
 
   it("returns the original array reference when nothing needs to change", () => {
