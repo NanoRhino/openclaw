@@ -115,11 +115,16 @@ export function resolveRuntimeContextPromptParts(params: {
   // 的 [QUEUED marker]\n<orphan text>, 把 orphan text 拼进 prompt(去掉 marker),
   // runtimeContext 只留剩下的部分。这样 orphan text 会以真 user 消息形态进入消息树,
   // 不再依赖会被 stripHistoricalRuntimeContextCustomMessages 剔除的 runtime-context。
-  const orphanSplit = rawRuntimeContext ? extractQueuedOrphanText(rawRuntimeContext) : null;
-  const promptWithOrphan = orphanSplit ? `${orphanSplit.orphanText}\n\n${prompt}` : prompt;
+  //
+  // ⚠️ 只在 prompt 非空时做转移。prompt 为空时是 runtime-only event 场景, 保留原
+  // runtimeContext 行为(走下面的 OPENCLAW_RUNTIME_EVENT_USER_PROMPT 分支), orphan
+  // 内容跟其他 runtime-context 一起留在系统上下文里, 不引入不当的 user 消息。
+  const orphanSplit =
+    prompt && rawRuntimeContext ? extractQueuedOrphanText(rawRuntimeContext) : null;
+  const finalPrompt = orphanSplit ? `${orphanSplit.orphanText}\n\n${prompt}` : prompt;
   const runtimeContext = orphanSplit ? orphanSplit.remaining : rawRuntimeContext;
 
-  if (!promptWithOrphan) {
+  if (!finalPrompt) {
     return runtimeContext
       ? {
           prompt: OPENCLAW_RUNTIME_EVENT_USER_PROMPT,
@@ -130,9 +135,7 @@ export function resolveRuntimeContextPromptParts(params: {
       : { prompt: "" };
   }
 
-  return runtimeContext
-    ? { prompt: promptWithOrphan, runtimeContext }
-    : { prompt: promptWithOrphan };
+  return runtimeContext ? { prompt: finalPrompt, runtimeContext } : { prompt: finalPrompt };
 }
 
 function buildRuntimeContextMessageContent(params: {

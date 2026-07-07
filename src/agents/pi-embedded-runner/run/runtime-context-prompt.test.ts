@@ -191,4 +191,24 @@ describe("runtime context prompt submission", () => {
     expect(parts.prompt).toBe("visible ask");
     expect(parts.runtimeContext).toBe("runtime prefix");
   });
+
+  it("runtime-only event 场景不走 orphan 分支(prompt 空 → 保留 runtime-only)", () => {
+    // transcriptPrompt 为空 = 系统触发的 runtime event, orphan 内容应保留在
+    // runtimeContext 里走 runtime-only 分支, 不能被误当"user prompt 附加内容"。
+    // 若强行拼进 prompt, 下游 messages 状态会异常。
+    const queuedMarker =
+      "[Queued user message that arrived while the previous turn was still active]";
+    const effectivePrompt = [queuedMarker, "叫我yvon", "", "some runtime event body"].join("\n");
+
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt,
+      transcriptPrompt: "",
+    });
+
+    // 空 prompt → 走 runtime-only, prompt 是固定标记
+    expect(parts.prompt).toBe("Continue the OpenClaw runtime event.");
+    expect(parts.runtimeOnly).toBe(true);
+    // orphan 内容不擅自剥离, 完整跟 runtime event body 一起进 runtimeContext
+    expect(parts.runtimeContext).toContain("叫我yvon");
+  });
 });
