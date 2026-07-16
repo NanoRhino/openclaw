@@ -657,8 +657,16 @@ function resolveBundledRuntimeDependencyJitiAliasMap(): Record<string, string> |
   );
 }
 
+// patch-008: one shared jiti loader cache for the whole process. Allocating a
+// fresh Map per call retained a full copy of every provider's module graph
+// (its ~305KB jiti cache-key strings) on every plugin-registry rebuild, leaking
+// ~1GB/h until OOM. Module source is immutable at runtime, so a process-lifetime
+// cache is correct — getCachedPluginJitiLoader already returns the cached loader
+// on a hit, so a shared cache stores each key exactly once.
+const sharedPluginJitiLoaders: PluginJitiLoaderCache = new Map();
+
 function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const jitiLoaders: PluginJitiLoaderCache = new Map();
+  const jitiLoaders = sharedPluginJitiLoaders;
   return (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
     const runtimeAliasMap = resolveBundledRuntimeDependencyJitiAliasMap();

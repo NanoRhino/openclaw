@@ -4,8 +4,14 @@ import { withProfile } from "./plugin-load-profile.js";
 
 export type PluginSourceLoader = (modulePath: string) => unknown;
 
+// patch-008: share one loader cache across all createPluginSourceLoader calls,
+// for parity with createPluginJitiLoader (see loader.ts sharedPluginJitiLoaders).
+// This cache keys on import.meta.url so it leaks far less than the module-loader
+// cache, but a fresh per-call Map is still an unbounded retained copy.
+const sharedPluginSourceLoaders: PluginJitiLoaderCache = new Map();
+
 export function createPluginSourceLoader(): PluginSourceLoader {
-  const loaders: PluginJitiLoaderCache = new Map();
+  const loaders = sharedPluginSourceLoaders;
   return (modulePath) => {
     const jiti = getCachedPluginJitiLoader({
       cache: loaders,
