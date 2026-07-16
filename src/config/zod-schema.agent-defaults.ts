@@ -98,6 +98,7 @@ export const AgentDefaultsSchema = z
       .optional(),
     skipBootstrap: z.boolean().optional(),
     skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
+    enforceFinalTag: z.boolean().optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),

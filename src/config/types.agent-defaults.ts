@@ -245,6 +245,14 @@ export type AgentDefaultsConfig = {
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   /**
+   * Default for the `<final>` provenance gate across agents. When true, only text
+   * inside `<final>…</final>` is delivered to the user (leaked reasoning is
+   * discarded) and the model is told about the tag; when false, the gate is
+   * disabled. Omit to fall back to provider detection (tagged-reasoning providers).
+   * A per-agent agents.list[].enforceFinalTag overrides this value.
+   */
+  enforceFinalTag?: boolean;
+  /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:
    * - always: inject on every turn (default)
