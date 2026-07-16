@@ -126,7 +126,9 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.extension-slack.config.ts",
       "test/vitest/vitest.extension-telegram.config.ts",
       "test/vitest/vitest.extension-voice-call.config.ts",
-      "test/vitest/vitest.extension-whatsapp.config.ts",
+      // NanoRhino fork: whatsapp shard removed from full runs — the channel is
+      // unused in production (Twilio-only). Changed-lane routing still picks it
+      // up if extensions/whatsapp files are ever touched.
       "test/vitest/vitest.extension-zalo.config.ts",
       "test/vitest/vitest.extension-browser.config.ts",
       "test/vitest/vitest.extension-qa.config.ts",
