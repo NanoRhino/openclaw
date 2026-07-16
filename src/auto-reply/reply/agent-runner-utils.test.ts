@@ -3,14 +3,22 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveRunModelFallbacksOverrideMock = vi.fn();
+  const resolveAgentEnforceFinalTagMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveRunModelFallbacksOverrideMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveRunModelFallbacksOverrideMock,
+    resolveAgentEnforceFinalTagMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveRunModelFallbacksOverride: (...args: unknown[]) =>
     hoisted.resolveRunModelFallbacksOverrideMock(...args),
+  resolveAgentEnforceFinalTag: (...args: unknown[]) =>
+    hoisted.resolveAgentEnforceFinalTagMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -57,6 +65,9 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveRunModelFallbacksOverrideMock.mockClear();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReset();
+    // Default: no per-agent/defaults override, so provider gating decides.
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(undefined);
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -144,6 +155,35 @@ describe("agent-runner-utils", () => {
       workspaceDir: run.workspaceDir,
       modelId: "MiniMax-M2.7",
     });
+  });
+
+  it("lets a per-agent/defaults true override beat a false provider default", () => {
+    const run = makeRun();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(true);
+    hoisted.isReasoningTagProviderMock.mockReturnValue(false);
+
+    expect(resolveEnforceFinalTag(run, "openai", "gpt-4.1")).toBe(true);
+    expect(hoisted.resolveAgentEnforceFinalTagMock).toHaveBeenCalledWith(run.config, run.agentId);
+    // Override short-circuits before provider gating.
+    expect(hoisted.isReasoningTagProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a per-agent/defaults false override beat a true provider default", () => {
+    const run = makeRun();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(false);
+    hoisted.isReasoningTagProviderMock.mockReturnValue(true);
+
+    expect(resolveEnforceFinalTag(run, "google-generative-ai", "gemini")).toBe(false);
+    expect(hoisted.isReasoningTagProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to provider gating when no config override is set", () => {
+    const run = makeRun();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(undefined);
+    hoisted.isReasoningTagProviderMock.mockReturnValue(true);
+
+    expect(resolveEnforceFinalTag(run, "google-generative-ai", "gemini")).toBe(true);
+    expect(hoisted.isReasoningTagProviderMock).toHaveBeenCalled();
   });
 
   it("builds embedded contexts and scopes auth profile by provider", () => {

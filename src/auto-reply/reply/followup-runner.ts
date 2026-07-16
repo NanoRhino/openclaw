@@ -25,6 +25,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveEnforceFinalTag,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveRunAuthProfile,
@@ -313,7 +314,7 @@ export function createFollowupRunner(params: {
                 transcriptPrompt: queued.transcriptPrompt,
                 extraSystemPrompt: run.extraSystemPrompt,
                 ownerNumbers: run.ownerNumbers,
-                enforceFinalTag: run.enforceFinalTag,
+                enforceFinalTag: resolveEnforceFinalTag(run, provider, model),
                 provider,
                 model,
                 ...authProfile,

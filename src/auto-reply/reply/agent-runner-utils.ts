@@ -1,4 +1,7 @@
-import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
+import {
+  resolveAgentEnforceFinalTag,
+  resolveRunModelFallbacksOverride,
+} from "../../agents/agent-scope.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -173,14 +176,24 @@ export const resolveEnforceFinalTag = (
   run: FollowupRun["run"],
   provider: string,
   model = run.model,
-) =>
-  (run.skipProviderRuntimeHints ? false : undefined) ??
-  (run.enforceFinalTag ||
-    isReasoningTagProvider(provider, {
-      config: run.config,
-      workspaceDir: run.workspaceDir,
-      modelId: model,
-    }));
+): boolean => {
+  // Per-agent / agents.defaults override wins over provider gating (and over the
+  // fast-reply hint skip): an operator opting into the gate must keep it on even
+  // on fast-reply runs, and an explicit false must stay off.
+  const override = resolveAgentEnforceFinalTag(run.config, run.agentId);
+  if (override !== undefined) {
+    return override;
+  }
+  return (
+    (run.skipProviderRuntimeHints ? false : undefined) ??
+    (run.enforceFinalTag ||
+      isReasoningTagProvider(provider, {
+        config: run.config,
+        workspaceDir: run.workspaceDir,
+        modelId: model,
+      }))
+  );
+};
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
   const config = run.config;
