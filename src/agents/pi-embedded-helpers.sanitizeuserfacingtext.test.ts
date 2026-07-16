@@ -208,6 +208,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
   });
 
+  it("strips HTML comments so internal markers never reach the user", () => {
+    expect(sanitizeUserFacingText("Nice work!<!--diet_suggestion:log lunch-->")).toBe("Nice work!");
+    expect(sanitizeUserFacingText("<!--diet_suggestion:x-->\n\nYou hit your protein goal.")).toBe(
+      "You hit your protein goal.",
+    );
+    expect(sanitizeUserFacingText("Before<!--\nmulti\nline\n-->After")).toBe("BeforeAfter");
+  });
+
   it("strips marked internal runtime context blocks but keeps real reply text", () => {
     const input = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,

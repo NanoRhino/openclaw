@@ -359,7 +359,20 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
+const HTML_COMMENT_RE = /<!--[\s\S]*?-->/g;
+
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+  const sanitized = sanitizeUserFacingTextImpl(text, opts);
+  // [patch:strip-html-comments] HTML comments must never reach a user-facing
+  // channel — the coaching skills emit markers like <!--diet_suggestion:...-->
+  // that would otherwise be sent verbatim over SMS. Strip them from every
+  // branch's output. Only trim when a comment was actually removed, so
+  // comment-free text keeps its existing trailing-whitespace behavior.
+  const withoutComments = sanitized.replace(HTML_COMMENT_RE, "");
+  return withoutComments === sanitized ? sanitized : withoutComments.trim();
+}
+
+function sanitizeUserFacingTextImpl(text: unknown, opts?: { errorContext?: boolean }): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;
