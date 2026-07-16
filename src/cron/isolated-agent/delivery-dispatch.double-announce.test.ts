@@ -497,6 +497,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -510,7 +513,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -524,6 +527,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK 🦞" });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -533,7 +539,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -548,6 +554,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -561,6 +570,30 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionId: "test-session-id",
       reason: "cron-delete-after-run-fallback",
     });
+  });
+
+  it("does not delete a session-targeted run's own session when deleteAfterRun is enabled", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a session-targeted one-shot runs in the user's live session, so
+    // cleanup must never delete it — only cron sessions may be deleted.
+    params.agentSessionKey = "agent:main:direct:+15551234567";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.delete" }),
+    );
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
@@ -968,6 +1001,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       threadId: 42,
     };
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -977,7 +1013,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -1026,6 +1062,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
     ] as never;
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1035,7 +1074,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -1106,6 +1145,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    // patch-014: a real one-shot cron executes in its own cron session, which is
+    // the only key deleteAfterRun cleanup is allowed to delete.
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1119,7 +1161,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },

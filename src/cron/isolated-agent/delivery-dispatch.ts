@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -464,6 +465,16 @@ export async function dispatchCronDelivery(
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
     if (!params.job.deleteAfterRun || directCronSessionDeleted) {
+      return;
+    }
+    // patch-014: delete-after-run session guard. A session-targeted one-shot
+    // (e.g. session:direct:<phone>) executes in the user's own live session, so
+    // agentSessionKey is agent:<id>:direct:<phone> (or main) — deleting that key
+    // wipes the user's whole conversation history and transcript. Only the job's
+    // own cron session (agent:<id>:cron:<jobId>[:run:<uuid>]) may be cleaned up
+    // here; a missing/blank key also skips — when in doubt, do not delete.
+    if (!isCronSessionKey(params.agentSessionKey)) {
+      directCronSessionDeleted = true;
       return;
     }
     try {
