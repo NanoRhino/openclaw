@@ -968,6 +968,12 @@ let pluginRegistryCacheHits = 0;
 let pluginRegistryCacheMisses = 0;
 let pluginRegistryCacheEvictions = 0;
 let pluginRegistryCacheStatsLoggedAtMs = 0;
+// Phase 3 registry-key collapse: workspaces that contribute no local plugin
+// material share one cache entry keyed by WORKSPACE_CACHE_KEY_SENTINEL instead of
+// their distinct workspace path. This counter (surfaced on the stats line) plus a
+// one-time INFO log let prod journals confirm the collapse is live.
+let pluginRegistrySharedCacheKeyBuilds = 0;
+let loggedSharedCacheKeyOnce = false;
 
 function logPluginRegistryCacheStats(): void {
   const now = Date.now();
@@ -976,7 +982,7 @@ function logPluginRegistryCacheStats(): void {
   }
   pluginRegistryCacheStatsLoggedAtMs = now;
   defaultLogger().info(
-    `[plugin-cache] size=${registryCache.size} cap=${pluginRegistryCacheEntryCap} hits=${pluginRegistryCacheHits} misses=${pluginRegistryCacheMisses} evictions=${pluginRegistryCacheEvictions}`,
+    `[plugin-cache] size=${registryCache.size} cap=${pluginRegistryCacheEntryCap} hits=${pluginRegistryCacheHits} misses=${pluginRegistryCacheMisses} evictions=${pluginRegistryCacheEvictions} sharedKeyBuilds=${pluginRegistrySharedCacheKeyBuilds}`,
   );
 }
 
@@ -1008,6 +1014,46 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
     registryCache.delete(oldestKey);
     pluginRegistryCacheEvictions += 1;
   }
+}
+
+// Phase 3 registry-key collapse. Plugin discovery only scans the workspace via
+// {workspace}/.openclaw/extensions (see discovery.ts:1160); when that directory is
+// absent or empty it yields zero workspace candidates, so the resulting registry
+// is byte-identical across every such workspace. Production runs ~300 agents whose
+// workspaces have no local extensions dir — embedding each distinct workspace path
+// gave every one its own key, thrashing the cap-128 LRU and forcing a full
+// (~5-20s, event-loop-blocking) registry rebuild on each agent's first turn. When
+// a workspace contributes no local plugin material we key it on this shared
+// sentinel so all such workspaces reuse one registry entry. Workspaces that DO
+// carry local plugin material keep their per-workspace path exactly as before.
+const WORKSPACE_CACHE_KEY_SENTINEL = "workspace:none";
+
+// Decides the workspace component of the registry cache key. The detection is a
+// filesystem check performed at key-build time, so a workspace that later adds a
+// local extensions dir naturally re-derives its own per-workspace key on the next
+// load (bounded only by the manifest/discovery cache TTL, nothing caches this
+// decision longer). Only "empty/absent → collapse" is treated as no-contribution;
+// any entry present keeps the per-workspace key, so we never share a key for a
+// workspace that could contribute candidates.
+function resolveWorkspaceCacheKeyComponent(workspaceExtensionsDir: string | undefined): {
+  component: string;
+  shared: boolean;
+} {
+  if (!workspaceExtensionsDir) {
+    // No workspace supplied (CLI/startup). Preserve the historical empty
+    // component; this path never carried a distinct workspace path to collapse.
+    return { component: "", shared: false };
+  }
+  let contributesLocalPlugins = false;
+  try {
+    contributesLocalPlugins = fs.readdirSync(workspaceExtensionsDir).length > 0;
+  } catch {
+    // ENOENT / not a directory → no local plugin material.
+    contributesLocalPlugins = false;
+  }
+  return contributesLocalPlugins
+    ? { component: workspaceExtensionsDir, shared: false }
+    : { component: WORKSPACE_CACHE_KEY_SENTINEL, shared: true };
 }
 
 function buildCacheKey(params: {
@@ -1065,7 +1111,17 @@ function buildCacheKey(params: {
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
-  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
+  const workspaceKey = resolveWorkspaceCacheKeyComponent(roots.workspace);
+  if (workspaceKey.shared) {
+    pluginRegistrySharedCacheKeyBuilds += 1;
+    if (!loggedSharedCacheKeyOnce) {
+      loggedSharedCacheKeyOnce = true;
+      defaultLogger().info(
+        `[plugin-cache] shared registry cache key active (${WORKSPACE_CACHE_KEY_SENTINEL}); workspaces without local plugins now collapse to one registry entry`,
+      );
+    }
+  }
+  return `${workspaceKey.component}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,

@@ -1,6 +1,11 @@
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { __testing, clearPluginLoaderCache, resolveRuntimePluginRegistry } from "./loader.js";
-import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
+import {
+  makeTempDir,
+  mkdirSafe,
+  resetPluginLoaderTestStateForTest,
+} from "./loader.test-fixtures.js";
 import {
   getMemoryEmbeddingProvider,
   registerMemoryEmbeddingProvider,
@@ -27,6 +32,13 @@ afterEach(() => {
 describe("getCompatibleActivePluginRegistry", () => {
   it("reuses the active registry only when the load context cache key matches", () => {
     const registry = createEmptyPluginRegistry();
+    // Give the active workspace real local plugin material so it keeps a
+    // per-workspace cache key. A workspace WITHOUT a local extensions dir now
+    // collapses to the shared sentinel key (Phase 3 registry-key collapse), so a
+    // distinct-workspace assertion has to compare against local plugin material to
+    // stay meaningful.
+    const workspaceWithLocalPlugin = makeTempDir();
+    mkdirSafe(path.join(workspaceWithLocalPlugin, ".openclaw", "extensions", "demo"));
     const loadOptions = {
       config: {
         plugins: {
@@ -34,7 +46,7 @@ describe("getCompatibleActivePluginRegistry", () => {
           load: { paths: ["/tmp/demo.js"] },
         },
       },
-      workspaceDir: "/tmp/workspace-a",
+      workspaceDir: workspaceWithLocalPlugin,
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
