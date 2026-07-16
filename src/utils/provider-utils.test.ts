@@ -14,7 +14,11 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   };
 });
 
-import { isReasoningTagProvider, resolveReasoningOutputMode } from "./provider-utils.js";
+import {
+  isReasoningTagProvider,
+  resolveReasoningOutputMode,
+  resolveReasoningTagHint,
+} from "./provider-utils.js";
 
 describe("resolveReasoningOutputMode", () => {
   beforeEach(() => {
@@ -98,5 +102,35 @@ describe("isReasoningTagProvider", () => {
 
     expect(isReasoningTagProvider(value, { workspaceDir: process.cwd() })).toBe(expected);
     expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveReasoningTagHint", () => {
+  beforeEach(() => {
+    resolveProviderReasoningOutputModeWithPluginMock.mockReset();
+    resolveProviderReasoningOutputModeWithPluginMock.mockReturnValue(undefined);
+  });
+
+  it("follows the gate when enforceFinalTag is true, ignoring provider detection", () => {
+    // Non-tagged provider would resolve false, but the gate wins.
+    expect(resolveReasoningTagHint(true, "openai", { workspaceDir: process.cwd() })).toBe(true);
+    expect(resolveProviderReasoningOutputModeWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("follows the gate when enforceFinalTag is false, ignoring provider detection", () => {
+    // Tagged provider would resolve true, but an explicit false gate wins.
+    expect(
+      resolveReasoningTagHint(false, "google-generative-ai", { workspaceDir: process.cwd() }),
+    ).toBe(false);
+    expect(resolveProviderReasoningOutputModeWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to provider detection when the gate is undefined", () => {
+    expect(
+      resolveReasoningTagHint(undefined, "google-generative-ai", { workspaceDir: process.cwd() }),
+    ).toBe(true);
+    expect(resolveReasoningTagHint(undefined, "openai", { workspaceDir: process.cwd() })).toBe(
+      false,
+    );
   });
 });

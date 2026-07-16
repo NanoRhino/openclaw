@@ -1,4 +1,7 @@
-import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import {
+  resolveAgentEnforceFinalTag,
+  resolveEffectiveModelFallbacks,
+} from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -16,15 +19,22 @@ export const resolveEnforceFinalTagWithResolver = (
   provider: string,
   model = run.model,
   isReasoningTagProvider?: ReasoningTagProviderResolver,
-) =>
-  (run.skipProviderRuntimeHints ? false : undefined) ??
-  (run.enforceFinalTag ||
-    isReasoningTagProvider?.(provider, {
-      config: run.config,
-      workspaceDir: run.workspaceDir,
-      modelId: model,
-    }) ||
-    false);
+): boolean => {
+  const override = resolveAgentEnforceFinalTag(run.config, run.agentId);
+  if (override !== undefined) {
+    return override;
+  }
+  return (
+    (run.skipProviderRuntimeHints ? false : undefined) ??
+    (run.enforceFinalTag ||
+      isReasoningTagProvider?.(provider, {
+        config: run.config,
+        workspaceDir: run.workspaceDir,
+        modelId: model,
+      }) ||
+      false)
+  );
+};
 
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
