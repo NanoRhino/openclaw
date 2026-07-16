@@ -31,6 +31,11 @@ type PayloadLogEvent = {
 type PayloadLogConfig = {
   enabled: boolean;
   filePath: string;
+  /**
+   * When set (OPENCLAW_ANTHROPIC_PAYLOAD_LOG_USAGE_ONLY), skip logging full
+   * request payloads and record only usage/token info.
+   */
+  usageOnly: boolean;
 };
 
 type PayloadLogWriter = QueuedFileWriter;
@@ -40,11 +45,12 @@ const log = createSubsystemLogger("agent/anthropic-payload");
 
 function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
   const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
+  const usageOnly = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_USAGE_ONLY) ?? false;
   const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
+  return { enabled, filePath, usageOnly };
 }
 
 function getWriter(filePath: string): PayloadLogWriter {
@@ -137,14 +143,18 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
-        const redactedPayload = sanitizeDiagnosticPayload(payload);
-        record({
-          ...base,
-          ts: new Date().toISOString(),
-          stage: "request",
-          payload: redactedPayload,
-          payloadDigest: digest(redactedPayload),
-        });
+        // OPENCLAW_ANTHROPIC_PAYLOAD_LOG_USAGE_ONLY skips the full
+        // request-payload record and keeps only the usage/token record below.
+        if (!cfg.usageOnly) {
+          const redactedPayload = sanitizeDiagnosticPayload(payload);
+          record({
+            ...base,
+            ts: new Date().toISOString(),
+            stage: "request",
+            payload: redactedPayload,
+            payloadDigest: digest(redactedPayload),
+          });
+        }
         return options?.onPayload?.(payload, model);
       };
       return streamFn(model, context, {
