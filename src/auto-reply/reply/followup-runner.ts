@@ -83,6 +83,7 @@ import {
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
 import {
+  resolveEnforceFinalTag,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -1332,7 +1333,7 @@ export function createFollowupRunner(params: {
                   assistantErrorPersistedAcrossFallback = true;
                 },
                 ownerNumbers: run.ownerNumbers,
-                enforceFinalTag: run.enforceFinalTag,
+                enforceFinalTag: resolveEnforceFinalTag(run, provider, model),
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,

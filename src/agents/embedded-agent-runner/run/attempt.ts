@@ -97,7 +97,7 @@ import {
 } from "../../../trajectory/runtime.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import { resolveReasoningTagHint } from "../../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -1934,7 +1934,11 @@ export async function runEmbeddedAttempt(
       params.bashElevated,
       sandboxInfoExecPolicy,
     );
-    const reasoningTagHint = isReasoningTagProvider(params.provider, {
+    // Keep the <final> hint coupled to the enforcement gate: when
+    // enforceFinalTag is resolved (e.g. via per-agent/defaults config), the hint
+    // must follow it so the model is told about <final> exactly when the gate is
+    // active. Falls back to provider detection when the gate is unset.
+    const reasoningTagHint = resolveReasoningTagHint(params.enforceFinalTag, params.provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,
       env: process.env,

@@ -1,5 +1,8 @@
 /** Builds embedded-agent run parameters from queued follow-up run state. */
-import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
+import {
+  resolveAgentEnforceFinalTag,
+  resolveEffectiveModelFallbacks,
+} from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -38,13 +41,19 @@ export function resolveModelFallbackOptions(
   };
 }
 
-/** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-function resolveEnforceFinalTagWithResolver(
+/** Resolves whether final-answer tags should be enforced for an embedded follow-up run.
+ * Tri-state override: agents.list[].enforceFinalTag beats agents.defaults.enforceFinalTag,
+ * which beats the provider-gated behavior. Exported for tests. */
+export function resolveEnforceFinalTagWithResolver(
   run: FollowupRun["run"],
   provider: string,
   model: string,
   isReasoningTagProvider?: ReasoningTagProviderResolver,
 ): boolean {
+  const override = resolveAgentEnforceFinalTag(run.config, run.agentId);
+  if (override !== undefined) {
+    return override;
+  }
   return (
     (run.skipProviderRuntimeHints ? false : undefined) ??
     (run.enforceFinalTag ||

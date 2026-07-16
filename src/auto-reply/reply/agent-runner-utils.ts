@@ -31,7 +31,10 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
-import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
+import {
+  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
+  resolveEnforceFinalTagWithResolver,
+} from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -230,6 +233,14 @@ export function resolveRunFastModeForFallbackCandidate(params: {
       : state.fastAutoOnSeconds,
   };
 }
+/** Resolves the <final> provenance gate for a follow-up run: per-agent /
+ * agents.defaults override first, then provider detection (4.24-line parity). */
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+): boolean => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
+
 /** Builds base embedded run params with auth and provider runtime hints. */
 export function buildEmbeddedRunBaseParams(
   params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],

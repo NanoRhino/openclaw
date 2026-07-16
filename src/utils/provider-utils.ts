@@ -81,3 +81,29 @@ export function isReasoningTagProvider(
     }) === "tagged"
   );
 }
+
+/**
+ * Resolve the system-prompt `<final>`/reasoning-tag hint so it follows the
+ * enforcement gate. When enforceFinalTag is explicitly resolved (true or false)
+ * the hint matches it; otherwise fall back to provider detection. Coupling the
+ * hint to the gate avoids the two broken combinations: gate on + hint off
+ * (every reply is suppressed) and gate off + hint on (literal `<final>` tags
+ * leak into the reply).
+ */
+export function resolveReasoningTagHint(
+  enforceFinalTag: boolean | undefined,
+  provider: string | undefined | null,
+  options?: {
+    config?: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+    modelId?: string;
+    modelApi?: string | null;
+    model?: ProviderRuntimeModel;
+  },
+): boolean {
+  if (enforceFinalTag !== undefined) {
+    return enforceFinalTag;
+  }
+  return isReasoningTagProvider(provider, options);
+}

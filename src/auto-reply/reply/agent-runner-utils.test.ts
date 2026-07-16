@@ -4,14 +4,22 @@ import type { FollowupRun } from "./queue.js";
 
 const hoisted = vi.hoisted(() => {
   const resolveEffectiveModelFallbacksMock = vi.fn();
+  const resolveAgentEnforceFinalTagMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const isReasoningTagProviderMock = vi.fn();
-  return { resolveEffectiveModelFallbacksMock, getChannelPluginMock, isReasoningTagProviderMock };
+  return {
+    resolveEffectiveModelFallbacksMock,
+    resolveAgentEnforceFinalTagMock,
+    getChannelPluginMock,
+    isReasoningTagProviderMock,
+  };
 });
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveEffectiveModelFallbacks: (...args: unknown[]) =>
     hoisted.resolveEffectiveModelFallbacksMock(...args),
+  resolveAgentEnforceFinalTag: (...args: unknown[]) =>
+    hoisted.resolveAgentEnforceFinalTagMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -26,6 +34,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunExecutionParams,
+  resolveEnforceFinalTag,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
 } = await import("./agent-runner-utils.js");
@@ -57,6 +66,8 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
 describe("agent-runner-utils", () => {
   beforeEach(() => {
     hoisted.resolveEffectiveModelFallbacksMock.mockClear();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReset();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(undefined);
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
@@ -251,6 +262,23 @@ describe("agent-runner-utils", () => {
       workspaceDir: run.workspaceDir,
       modelId: "MiniMax-M2.7",
     });
+  });
+
+  it("uses an explicit per-agent final-tag override before provider detection", () => {
+    const run = makeRun();
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(true);
+
+    expect(resolveEnforceFinalTag(run, "amazon-bedrock", "claude-sonnet-5")).toBe(true);
+    expect(hoisted.resolveAgentEnforceFinalTagMock).toHaveBeenCalledWith(run.config, run.agentId);
+    expect(hoisted.isReasoningTagProviderMock).not.toHaveBeenCalled();
+  });
+
+  it("honors an explicit false final-tag override", () => {
+    const run = makeRun({ enforceFinalTag: true });
+    hoisted.resolveAgentEnforceFinalTagMock.mockReturnValue(false);
+
+    expect(resolveEnforceFinalTag(run, "google-generative-ai", "gemini")).toBe(false);
+    expect(hoisted.isReasoningTagProviderMock).not.toHaveBeenCalled();
   });
 
   it("builds embedded contexts and scopes auth profile by provider", () => {

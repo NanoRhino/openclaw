@@ -342,6 +342,23 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+/**
+ * Tri-state resolution for the `<final>` provenance gate override:
+ * per-agent agents.list[].enforceFinalTag wins over agents.defaults.enforceFinalTag,
+ * and returns undefined when neither is set (callers fall back to provider gating).
+ */
+export function resolveAgentEnforceFinalTag(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): boolean | undefined {
+  const defaultValue = cfg?.agents?.defaults?.enforceFinalTag;
+  if (!cfg || !agentId) {
+    return defaultValue;
+  }
+  const agentValue = resolveAgentConfig(cfg, agentId)?.enforceFinalTag;
+  return agentValue ?? defaultValue;
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,
