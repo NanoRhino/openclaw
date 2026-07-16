@@ -450,15 +450,18 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     expect(() => createJob(state, mainJobInput(agentId))).not.toThrow();
   });
 
+  // patch-006 (NanoRhino fork deviation): non-default agents may create
+  // main-session jobs — upstream rejects these.
   it.each([
     { name: "non-default agentId", defaultAgentId: "main", agentId: "custom-agent" },
     { name: "missing defaultAgentId", defaultAgentId: undefined, agentId: "custom-agent" },
-  ] as const)("rejects creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
-    const state = createMockState(now, defaultAgentId ? { defaultAgentId } : undefined);
-    expect(() => createJob(state, mainJobInput(agentId))).toThrow(
-      'cron: sessionTarget "main" is only valid for the default agent',
-    );
-  });
+  ] as const)(
+    "allows creating a main-session job for $name (patch-006)",
+    ({ defaultAgentId, agentId }) => {
+      const state = createMockState(now, defaultAgentId ? { defaultAgentId } : undefined);
+      expect(() => createJob(state, mainJobInput(agentId))).not.toThrow();
+    },
+  );
 
   it("allows isolated session job for non-default agents", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
@@ -527,17 +530,13 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
   });
 
   it.each([
-    { name: "rejects patching agentId to non-default", agentId: "custom-agent", shouldThrow: true },
-    { name: "allows patching agentId to the default agent", agentId: "main", shouldThrow: false },
-  ] as const)("$name on a main-session job", ({ agentId, shouldThrow }) => {
+    // patch-006 (NanoRhino fork deviation): patching a main-session job to a
+    // non-default agentId is allowed — upstream rejects it.
+    { name: "allows patching agentId to non-default (patch-006)", agentId: "custom-agent" },
+    { name: "allows patching agentId to the default agent", agentId: "main" },
+  ] as const)("$name on a main-session job", ({ agentId }) => {
     const job = createMainJob();
     const patch = { agentId } as CronJobPatch;
-    if (shouldThrow) {
-      expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).toThrow(
-        'cron: sessionTarget "main" is only valid for the default agent',
-      );
-      return;
-    }
     expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
   });
 

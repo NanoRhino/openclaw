@@ -502,7 +502,10 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
-  it("rejects sessionTarget main for non-default agents at creation time", async () => {
+  // patch-006 (NanoRhino fork deviation): upstream rejects sessionTarget "main"
+  // for non-default agents; in this fork per-user agents schedule their own
+  // main-session crons, so creation succeeds.
+  it("allows sessionTarget main for non-default agents at creation time (patch-006)", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 
     const { store, cron } = await createWakeModeNowMainHarness({
@@ -516,7 +519,7 @@ describe("CronService", () => {
         name: "wakeMode now with agent",
         agentId: "ops",
       }),
-    ).rejects.toThrow('cron: sessionTarget "main" is only valid for the default agent');
+    ).resolves.toMatchObject({ agentId: "ops", sessionTarget: "main" });
 
     await stopCronAndCleanup(cron, store);
   });
