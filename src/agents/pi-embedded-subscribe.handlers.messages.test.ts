@@ -722,4 +722,51 @@ describe("handleMessageEnd", () => {
       },
     });
   });
+
+  it("warns [final-tag] when the gate discards the entire visible reply", () => {
+    const ctx = createMessageEndContext();
+    Object.assign(ctx.params, {
+      enforceFinalTag: true,
+      agentId: "nutritionist-1",
+      sessionKey: "agent:nutritionist-1:main",
+    });
+    // Simulate a reply the model never wrapped in <final>: the gate strips it all.
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Locating the macros for this meal..." }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    const warn = ctx.log.warn as unknown as ReturnType<typeof vi.fn>;
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = String(warn.mock.calls[0]?.[0]);
+    expect(line).toContain("[final-tag]");
+    expect(line).toContain("agentId=nutritionist-1");
+    expect(line).toContain("sessionKey=agent:nutritionist-1:main");
+    // Length is reported, but never the discarded content itself.
+    expect(line).toContain("discardedChars=");
+    expect(line).not.toContain("Locating the macros");
+  });
+
+  it("does not warn [final-tag] when the gate keeps visible text", () => {
+    const ctx = createMessageEndContext();
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    (ctx as unknown as { stripBlockTags: (t: string) => string }).stripBlockTags = (t) => t;
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Logged: 420 kcal, 38g protein." }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
 });

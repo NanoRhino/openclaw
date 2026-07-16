@@ -637,8 +637,24 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
+  const strippedVisibleText = ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false });
+  // Canary: the enforceFinalTag gate discarded the entire visible reply because
+  // the model never opened a <final> tag. Warn (without the content, which may
+  // contain user data) so rollout can watch for over-suppression.
+  if (
+    ctx.params.enforceFinalTag &&
+    rawVisibleText.trim().length > 0 &&
+    strippedVisibleText.trim().length === 0
+  ) {
+    ctx.log.warn(
+      `[final-tag] discarded reply with no <final> tag ` +
+        `agentId=${ctx.params.agentId ?? "unknown"} ` +
+        `sessionKey=${ctx.params.sessionKey ?? "unknown"} ` +
+        `runId=${ctx.params.runId} discardedChars=${rawVisibleText.length}`,
+    );
+  }
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false }),
+    text: strippedVisibleText,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
