@@ -3445,6 +3445,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               skipBootstrap: {
                 type: "boolean",
               },
+              enforceFinalTag: {
+                type: "boolean",
+                title: "Enforce Final Tag",
+                description:
+                  "Default for the <final> provenance gate across agents. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning) and tell the model about the tag; disable to turn the gate off. Omit to fall back to provider detection. A per-agent agents.list[].enforceFinalTag overrides this default.",
+              },
               contextInjection: {
                 anyOf: [
                   {
@@ -5915,6 +5921,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Fast Mode Default",
                   description:
                     "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
+                },
+                enforceFinalTag: {
+                  type: "boolean",
+                  title: "Agent Enforce Final Tag",
+                  description:
+                    "Force the <final> provenance gate on or off for this agent, overriding the default provider-gated behavior. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning); disable to turn the gate off. Omit to inherit agents.defaults.enforceFinalTag, then provider detection.",
                 },
                 skills: {
                   type: "array",
@@ -23609,6 +23621,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional per-agent default for fast mode. Applies when no per-message or session fast-mode override is set.",
       tags: ["advanced"],
     },
+    "agents.list[].enforceFinalTag": {
+      label: "Agent Enforce Final Tag",
+      help: "Force the <final> provenance gate on or off for this agent, overriding the default provider-gated behavior. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning); disable to turn the gate off. Omit to inherit agents.defaults.enforceFinalTag, then provider detection.",
+      tags: ["advanced"],
+    },
     "agents.defaults": {
       label: "Agent Defaults",
       help: "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
@@ -25125,6 +25142,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.promptOverlays.gpt5.personality": {
       label: "GPT-5 Personality Overlay",
       help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.enforceFinalTag": {
+      label: "Enforce Final Tag",
+      help: "Default for the <final> provenance gate across agents. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning) and tell the model about the tag; disable to turn the gate off. Omit to fall back to provider detection. A per-agent agents.list[].enforceFinalTag overrides this default.",
       tags: ["advanced"],
     },
     "agents.defaults.contextInjection": {
@@ -27959,6 +27981,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.4.24",
+  version: "2026.4.24-nanorhino.1",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

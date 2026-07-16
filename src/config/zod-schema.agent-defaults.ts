@@ -83,6 +83,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     skipBootstrap: z.boolean().optional(),
+    enforceFinalTag: z.boolean().optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
