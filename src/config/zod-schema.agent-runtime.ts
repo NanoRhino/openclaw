@@ -1059,6 +1059,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    enforceFinalTag: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

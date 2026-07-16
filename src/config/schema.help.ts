@@ -323,6 +323,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":
     'Optional per-agent default for fast mode ("auto", true, or false). Applies when no per-message or session fast-mode override is set.',
+  "agents.list[].enforceFinalTag":
+    "Force the <final> provenance gate on or off for this agent, overriding the default provider-gated behavior. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning); disable to turn the gate off. Omit to inherit agents.defaults.enforceFinalTag, then provider detection.",
   "agents.list[].runtime":
     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
   "agents.list[].runtime.type":
@@ -1158,6 +1160,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.skipOptionalBootstrapFiles":
     "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+  "agents.defaults.enforceFinalTag":
+    "Default for the <final> provenance gate across agents. Enable to deliver only text inside <final>...</final> (discarding leaked reasoning) and tell the model about the tag; disable to turn the gate off. Omit to fall back to provider detection. A per-agent agents.list[].enforceFinalTag overrides this default.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.bootstrapMaxChars":

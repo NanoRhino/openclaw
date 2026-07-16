@@ -30,6 +30,7 @@ export type ResolvedAgentConfig = {
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
   experimental?: AgentDefaultsConfig["experimental"];
+  enforceFinalTag?: AgentEntry["enforceFinalTag"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -142,6 +143,7 @@ export function resolveAgentConfig(
       typeof entry.experimental === "object" && entry.experimental
         ? { ...agentDefaults?.experimental, ...entry.experimental }
         : agentDefaults?.experimental,
+    enforceFinalTag: entry.enforceFinalTag,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,

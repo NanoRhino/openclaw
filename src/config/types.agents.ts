@@ -116,6 +116,13 @@ export type AgentConfig = {
   bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
   /** Optional per-agent experimental flags. Omitted fields inherit agents.defaults.experimental. */
   experimental?: AgentDefaultsConfig["experimental"];
+  /**
+   * Force the `<final>` provenance gate on or off for this agent, overriding the
+   * default provider-gated behavior. When true, only text inside `<final>…</final>`
+   * is delivered (leaked reasoning is discarded); when false, the gate is disabled.
+   * Omit to fall back to agents.defaults.enforceFinalTag, then provider detection.
+   */
+  enforceFinalTag?: boolean;
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;
