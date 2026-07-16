@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { __testing, loadOpenClawPlugins } from "./loader.js";
 import {
   makeTempDir,
@@ -9,7 +9,22 @@ import {
 } from "./loader.test-fixtures.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
+// The collapse is opt-in via OPENCLAW_SHARED_REGISTRY_KEY=1 (fleet operators set
+// it in the gateway env); these tests exercise the enabled behavior explicitly.
+const SHARED_KEY_ENV = "OPENCLAW_SHARED_REGISTRY_KEY";
+let previousSharedKeyEnv: string | undefined;
+
+beforeEach(() => {
+  previousSharedKeyEnv = process.env[SHARED_KEY_ENV];
+  process.env[SHARED_KEY_ENV] = "1";
+});
+
 afterEach(() => {
+  if (previousSharedKeyEnv === undefined) {
+    delete process.env[SHARED_KEY_ENV];
+  } else {
+    process.env[SHARED_KEY_ENV] = previousSharedKeyEnv;
+  }
   resetPluginLoaderTestStateForTest();
 });
 
@@ -35,6 +50,27 @@ function workspaceWithLocalExtension(): string {
 const CONFIG = { plugins: { allow: [] } };
 
 describe("registry cache key collapse for workspaces without local plugins", () => {
+  it("keeps legacy per-workspace keys when the env flag is not set", () => {
+    delete process.env[SHARED_KEY_ENV];
+    const env = sharedEnv(makeTempDir());
+    const workspaceA = makeTempDir();
+    const workspaceB = makeTempDir();
+
+    const { cacheKey: keyA } = __testing.resolvePluginLoadCacheContext({
+      config: CONFIG,
+      workspaceDir: workspaceA,
+      env,
+    });
+    const { cacheKey: keyB } = __testing.resolvePluginLoadCacheContext({
+      config: CONFIG,
+      workspaceDir: workspaceB,
+      env,
+    });
+
+    expect(keyA).not.toBe(keyB);
+    expect(keyA).toContain(path.join(workspaceA, ".openclaw", "extensions"));
+  });
+
   it("produces one shared key for two different workspaces that have no local plugins", () => {
     const env = sharedEnv(makeTempDir());
     const workspaceA = makeTempDir();

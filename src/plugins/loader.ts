@@ -1044,6 +1044,13 @@ function resolveWorkspaceCacheKeyComponent(workspaceExtensionsDir: string | unde
     // component; this path never carried a distinct workspace path to collapse.
     return { component: "", shared: false };
   }
+  // Opt-in via env (set in gateway.systemd.env alongside the cache-cap knob).
+  // Default off preserves the legacy per-workspace key: upstream tests lean on
+  // distinct temp-workspace paths as an implicit cache buster, and a fleet
+  // operator flips this deliberately.
+  if (process.env.OPENCLAW_SHARED_REGISTRY_KEY !== "1") {
+    return { component: workspaceExtensionsDir, shared: false };
+  }
   let contributesLocalPlugins = false;
   try {
     contributesLocalPlugins = fs.readdirSync(workspaceExtensionsDir).length > 0;
