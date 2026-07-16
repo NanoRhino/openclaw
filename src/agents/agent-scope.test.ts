@@ -7,6 +7,7 @@ import {
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveDefaultAgentDir,
+  resolveAgentEnforceFinalTag,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -771,5 +772,54 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
+  });
+});
+
+describe("resolveAgentEnforceFinalTag", () => {
+  it("returns undefined when neither per-agent nor defaults is set", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }] },
+    };
+    expect(resolveAgentEnforceFinalTag(cfg, "main")).toBeUndefined();
+  });
+
+  it("uses the agents.defaults value when the agent omits it", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { enforceFinalTag: true },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(resolveAgentEnforceFinalTag(cfg, "main")).toBe(true);
+  });
+
+  it("lets a per-agent true override agents.defaults false", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { enforceFinalTag: false },
+        list: [{ id: "main", enforceFinalTag: true }],
+      },
+    };
+    expect(resolveAgentEnforceFinalTag(cfg, "main")).toBe(true);
+  });
+
+  it("lets a per-agent false override agents.defaults true", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { enforceFinalTag: true },
+        list: [{ id: "main", enforceFinalTag: false }],
+      },
+    };
+    expect(resolveAgentEnforceFinalTag(cfg, "main")).toBe(false);
+  });
+
+  it("falls back to the defaults value when agentId is missing", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { enforceFinalTag: true },
+        list: [{ id: "main", enforceFinalTag: false }],
+      },
+    };
+    expect(resolveAgentEnforceFinalTag(cfg, undefined)).toBe(true);
   });
 });
