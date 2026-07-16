@@ -21,6 +21,7 @@ import {
   resolveCronPayloadOutcome,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { resolveCronLeaveGateReason } from "./leave-gate.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
@@ -947,6 +948,22 @@ export async function runCronIsolatedAgentTurn(params: {
   const prepared = await prepareCronRunContext({ input: params, isFastTestEnv });
   if (!prepared.ok) {
     return prepared.result;
+  }
+
+  // patch-012: cron leave gate — skip a proactive (recurring, announce) run in
+  // the gateway, before the LLM turn, when the user is on leave or has paused
+  // reminders. The scheduler treats "skipped" as a healthy outcome (like the
+  // heartbeat-skip path) and the whole turn cost is saved.
+  const leaveGateReason = resolveCronLeaveGateReason(params.job, prepared.context);
+  if (leaveGateReason) {
+    logWarn(
+      `[cron:${params.job.id} ${params.job.name}] leave-gate: skipping proactive cron run (${leaveGateReason})`,
+    );
+    return prepared.context.withRunSession({
+      status: "skipped",
+      error: leaveGateReason,
+      summary: `leave-gate: ${leaveGateReason}`,
+    });
   }
 
   try {
