@@ -71,7 +71,7 @@ export function resolveCronLeaveGateReason(
   ctx: CronLeaveGateContext,
 ): string | null {
   try {
-    if (ctx.deliveryRequested !== true) {
+    if (!ctx.deliveryRequested) {
       return null;
     }
     if (!job.schedule || job.schedule.kind === "at") {
