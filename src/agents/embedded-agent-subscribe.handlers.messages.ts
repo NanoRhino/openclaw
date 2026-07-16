@@ -1094,10 +1094,27 @@ export function handleMessageEnd(
         ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
         ctx.builtinToolNames?.has("message") === true,
     }) ?? rawVisibleText;
-  const finalVisibleText = ctx.params.enforceFinalTag
-    ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
-    : visibleText;
-
+  const strippedVisibleText = ctx.stripBlockTags(
+    visibleText,
+    { thinking: false, final: false },
+    { final: true },
+  );
+  const finalVisibleText = ctx.params.enforceFinalTag ? strippedVisibleText : visibleText;
+  // Canary: the enforceFinalTag gate discarded the entire visible reply because
+  // the model never opened a <final> tag. Warn (without the content, which may
+  // contain user data) so rollout can watch for over-suppression.
+  if (
+    ctx.params.enforceFinalTag &&
+    visibleText.trim().length > 0 &&
+    strippedVisibleText.trim().length === 0
+  ) {
+    ctx.log.warn(
+      `[final-tag] discarded reply with no <final> tag ` +
+        `agentId=${ctx.params.agentId ?? "unknown"} ` +
+        `sessionKey=${ctx.params.sessionKey ?? "unknown"} ` +
+        `runId=${ctx.params.runId} discardedChars=${visibleText.length}`,
+    );
+  }
   const text = resolveSilentReplyFallbackText({
     text: finalVisibleText,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
