@@ -232,7 +232,16 @@ type CachedPluginState = {
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-let pluginRegistryCacheEntryCap = MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+
+// patch-011: OPENCLAW_PLUGIN_REGISTRY_CACHE_CAP (>=16) raises the LRU cap. The
+// default of 128 is far below fleet size (~500 workspaces × 2-3 key variants),
+// which caused per-turn eviction thrash — every agent turn re-imported and
+// re-registered all extensions. Unset/invalid keeps the stock 128 (patch inert).
+function resolvePluginRegistryCacheEntryCap(): number {
+  const parsed = Number.parseInt(process.env.OPENCLAW_PLUGIN_REGISTRY_CACHE_CAP ?? "", 10);
+  return Number.isFinite(parsed) && parsed >= 16 ? parsed : MAX_PLUGIN_REGISTRY_CACHE_ENTRIES;
+}
+let pluginRegistryCacheEntryCap = resolvePluginRegistryCacheEntryCap();
 const registryCache = new Map<string, CachedPluginState>();
 const inFlightPluginRegistryLoads = new Set<string>();
 const openAllowlistWarningCache = new Set<string>();
@@ -951,11 +960,35 @@ export const __testing = {
   },
 };
 
+// patch-011: lightweight cache instrumentation — hit/miss/eviction counters and
+// a single stats line throttled to once per 5 minutes. This is the evidence
+// stream for tuning OPENCLAW_PLUGIN_REGISTRY_CACHE_CAP against thrash.
+const PLUGIN_REGISTRY_CACHE_STATS_INTERVAL_MS = 5 * 60 * 1000;
+let pluginRegistryCacheHits = 0;
+let pluginRegistryCacheMisses = 0;
+let pluginRegistryCacheEvictions = 0;
+let pluginRegistryCacheStatsLoggedAtMs = 0;
+
+function logPluginRegistryCacheStats(): void {
+  const now = Date.now();
+  if (now - pluginRegistryCacheStatsLoggedAtMs < PLUGIN_REGISTRY_CACHE_STATS_INTERVAL_MS) {
+    return;
+  }
+  pluginRegistryCacheStatsLoggedAtMs = now;
+  defaultLogger().info(
+    `[plugin-cache] size=${registryCache.size} cap=${pluginRegistryCacheEntryCap} hits=${pluginRegistryCacheHits} misses=${pluginRegistryCacheMisses} evictions=${pluginRegistryCacheEvictions}`,
+  );
+}
+
 function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefined {
   const cached = registryCache.get(cacheKey);
   if (!cached) {
+    pluginRegistryCacheMisses += 1;
+    logPluginRegistryCacheStats();
     return undefined;
   }
+  pluginRegistryCacheHits += 1;
+  logPluginRegistryCacheStats();
   // Refresh insertion order so frequently reused registries survive eviction.
   registryCache.delete(cacheKey);
   registryCache.set(cacheKey, cached);
@@ -973,6 +1006,7 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
       break;
     }
     registryCache.delete(oldestKey);
+    pluginRegistryCacheEvictions += 1;
   }
 }
 
