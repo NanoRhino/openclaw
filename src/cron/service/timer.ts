@@ -43,15 +43,6 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 
 /**
- * Maximum time a single tick may hold `state.running` before a recheck timer
- * fires a takeover. In-flight jobs are protected from double execution by
- * their `runningAtMs` markers, so a takeover only lets newly due jobs run
- * instead of queueing behind a wedged or deeply backlogged tick.
- * (NanoRhino fork: scheduler watchdog, 2026-07-16 congestion incident.)
- */
-const TICK_WATCHDOG_MS = 15 * 60_000;
-
-/**
  * Minimum gap between consecutive fires of the same cron job.  This is a
  * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
  * a value within the same second as the just-completed run.  The guard
@@ -695,34 +686,20 @@ function armRunningRecheckTimer(state: CronServiceState) {
 
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
-    const heldMs =
-      typeof state.tickStartedAtMs === "number" ? state.deps.nowMs() - state.tickStartedAtMs : 0;
-    if (heldMs < TICK_WATCHDOG_MS) {
-      // Re-arm the timer so the scheduler keeps ticking even when a job is
-      // still executing.  Without this, a long-running job (e.g. an agentTurn
-      // exceeding MAX_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
-      // while `running` is true.  The early return then leaves no timer set,
-      // silently killing the scheduler until the next gateway restart.
-      //
-      // We use MAX_TIMER_DELAY_MS as a fixed re-check interval to avoid a
-      // zero-delay hot-loop when past-due jobs are waiting for the current
-      // execution to finish.
-      // See: https://github.com/openclaw/openclaw/issues/12025
-      armRunningRecheckTimer(state);
-      return;
-    }
-    // Watchdog takeover: the previous tick has held `running` past the
-    // threshold (wedged job or deep backlog). Start a fresh tick so newly due
-    // jobs execute; jobs from the displaced tick keep their `runningAtMs`
-    // markers and are skipped by collectRunnableJobs, so nothing double-runs.
-    state.deps.log.error(
-      { heldMs, tickStartedAtMs: state.tickStartedAtMs },
-      "cron: tick watchdog forcing scheduler takeover; previous tick still marked running",
-    );
+    // Re-arm the timer so the scheduler keeps ticking even when a job is
+    // still executing.  Without this, a long-running job (e.g. an agentTurn
+    // exceeding MAX_TIMER_DELAY_MS) causes the clamped 60 s timer to fire
+    // while `running` is true.  The early return then leaves no timer set,
+    // silently killing the scheduler until the next gateway restart.
+    //
+    // We use MAX_TIMER_DELAY_MS as a fixed re-check interval to avoid a
+    // zero-delay hot-loop when past-due jobs are waiting for the current
+    // execution to finish.
+    // See: https://github.com/openclaw/openclaw/issues/12025
+    armRunningRecheckTimer(state);
+    return;
   }
   state.running = true;
-  state.tickStartedAtMs = state.deps.nowMs();
-  const tickGeneration = ++state.tickGeneration;
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
@@ -872,12 +849,7 @@ export async function onTimer(state: CronServiceState) {
       }
     }
 
-    // Only the current tick generation may release the scheduler; a tick
-    // displaced by the watchdog must not clobber its successor's state.
-    if (state.tickGeneration === tickGeneration) {
-      state.running = false;
-      state.tickStartedAtMs = null;
-    }
+    state.running = false;
     armTimer(state);
   }
 }

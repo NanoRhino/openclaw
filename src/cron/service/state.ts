@@ -126,17 +126,6 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
-  /**
-   * Wall-clock start of the tick currently holding `running`, used by the
-   * onTimer watchdog to detect a wedged tick and force a scheduler takeover.
-   */
-  tickStartedAtMs: number | null;
-  /**
-   * Monotonic tick counter. A tick only clears `running` in its finally block
-   * when its generation is still current, so a watchdog takeover is not undone
-   * by the stale tick it displaced.
-   */
-  tickGeneration: number;
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
@@ -155,8 +144,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
-    tickStartedAtMs: null,
-    tickGeneration: 0,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
