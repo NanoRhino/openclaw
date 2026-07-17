@@ -11,7 +11,11 @@ import {
   type ReplyDirectiveParseResult,
 } from "../auto-reply/reply/reply-directives.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import {
+  isSilentReplyPayloadText,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
@@ -1100,11 +1104,28 @@ export function handleMessageEnd(
     { final: true },
   );
   const finalVisibleText = ctx.params.enforceFinalTag ? strippedVisibleText : visibleText;
+  // enforceFinalTag strips every character the model emitted outside a <final>
+  // block. When the model's entire reply is a bare silent sentinel (NO_REPLY
+  // emitted without wrapping it in <final>, e.g. after a "👍"), that strip
+  // collapses an intentional silence into a zero-payload turn, which the
+  // incomplete-turn guard then surfaces to the user as
+  // "⚠️ Agent couldn't generate a response." Recognize the discarded sentinel
+  // and restore it so the turn flows through the normal silent-reply path
+  // (finalizeAssistantTexts -> hasOnlySilentAssistantReply exemption; the
+  // NO_REPLY payload is suppressed downstream by createOutboundPayloadPlan).
+  // Genuine empty or garbled output carries no sentinel and still surfaces the
+  // incomplete-turn error, which stays useful for real failures.
+  const discardedSilentSentinel =
+    ctx.params.enforceFinalTag === true &&
+    strippedVisibleText.trim().length === 0 &&
+    isSilentReplyPayloadText(rawVisibleText, SILENT_REPLY_TOKEN);
   // Canary: the enforceFinalTag gate discarded the entire visible reply because
   // the model never opened a <final> tag. Warn (without the content, which may
-  // contain user data) so rollout can watch for over-suppression.
+  // contain user data) so rollout can watch for over-suppression. A discarded
+  // silent sentinel is intentional silence, not lost content, so skip the warn.
   if (
     ctx.params.enforceFinalTag &&
+    !discardedSilentSentinel &&
     visibleText.trim().length > 0 &&
     strippedVisibleText.trim().length === 0
   ) {
@@ -1116,7 +1137,7 @@ export function handleMessageEnd(
     );
   }
   const text = resolveSilentReplyFallbackText({
-    text: finalVisibleText,
+    text: discardedSilentSentinel ? SILENT_REPLY_TOKEN : finalVisibleText,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =
