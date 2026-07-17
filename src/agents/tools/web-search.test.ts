@@ -125,3 +125,19 @@ describe("web_search scoped config merge", () => {
     });
   });
 });
+
+describe("createWebSearchTool enabled gate", () => {
+  it("returns null immediately when tools.web.search.enabled is false", async () => {
+    const { createWebSearchTool } = await import("./web-search.js");
+    const tool = createWebSearchTool({
+      config: { tools: { web: { search: { enabled: false } } } } as never,
+    });
+    expect(tool).toBeNull();
+  });
+
+  it("builds the tool when web search is not explicitly disabled", async () => {
+    const { createWebSearchTool } = await import("./web-search.js");
+    const tool = createWebSearchTool({ config: {} as never });
+    expect(tool?.name).toBe("web_search");
+  });
+});

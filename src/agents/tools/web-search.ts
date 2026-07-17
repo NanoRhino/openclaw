@@ -15,6 +15,14 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
 }): AnyAgentTool | null {
+  // Honor `tools.web.search.enabled: false` BEFORE the provider resolution below.
+  // resolveWebSearchDefinition → resolvePluginWebSearchProviders materializes the
+  // web-search provider plugins on every call (~2s/turn measured), and only checks
+  // the enabled flag afterward — so a disabled agent must short-circuit here to
+  // skip that cost entirely, not pay it and then discard the tool.
+  if (options?.config?.tools?.web?.search?.enabled === false) {
+    return null;
+  }
   const runtimeProviderId =
     options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
   const preferRuntimeProviders =
