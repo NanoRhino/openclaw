@@ -241,6 +241,8 @@ export function createMockCronStateForJobs(params: {
     store: { version: 1, jobs: params.jobs },
     running: false,
     timer: null,
+    tickStartedAtMs: null,
+    tickGeneration: 0,
     storeLoadedAtMs: nowMs,
     storeFileMtimeMs: null,
     op: Promise.resolve(),

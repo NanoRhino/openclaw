@@ -7,8 +7,11 @@ import {
   createRunningCronServiceState,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { onTimer } from "./service/timer.js";
+import { onTimer, stopTimer } from "./service/timer.js";
 import type { CronJob } from "./types.js";
+
+// Mirrors TICK_WATCHDOG_MS in service/timer.ts (not exported).
+const TICK_WATCHDOG_TEST_MS = 15 * 60_000;
 
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
@@ -150,6 +153,130 @@ describe("CronService - timer re-arm when running (#12025)", () => {
     expect(state.running).toBe(false);
 
     timeoutSpy.mockRestore();
+    await store.cleanup();
+  });
+
+  it("does not take over while a tick is within the watchdog threshold", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    const state = createRunningCronServiceState({
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      jobs: [createDueRecurringJob({ id: "due-job", nowMs: now, nextRunAtMs: now })],
+    });
+    state.tickStartedAtMs = now - 14 * 60_000;
+
+    await onTimer(state);
+
+    expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(state.running).toBe(true);
+    expect(noopLogger.error).not.toHaveBeenCalled();
+
+    stopTimer(state);
+    await store.cleanup();
+  });
+
+  it("watchdog takes over a tick that held running past the threshold", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [createDueRecurringJob({ id: "due-job", nowMs: now, nextRunAtMs: now })],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
+    });
+    // Simulate a wedged tick: `running` held since 16 minutes ago.
+    state.running = true;
+    state.tickStartedAtMs = now - 16 * 60_000;
+    const staleGeneration = state.tickGeneration;
+
+    await onTimer(state);
+
+    // The takeover tick executed the due job and released the scheduler.
+    expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(state.running).toBe(false);
+    expect(state.tickGeneration).toBe(staleGeneration + 1);
+    expect(noopLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ heldMs: 16 * 60_000 }),
+      expect.stringContaining("watchdog"),
+    );
+
+    stopTimer(state);
+    await store.cleanup();
+  });
+
+  it("a displaced tick does not clobber its successor's running state", async () => {
+    const store = await makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const deferredRun = createDeferred<{ status: "ok"; summary: string }>();
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [createDueRecurringJob({ id: "slow-job", nowMs: now, nextRunAtMs: now })],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    let currentMs = now;
+    const state = createCronServiceState({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => currentMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => await deferredRun.promise),
+    });
+
+    // First tick starts and blocks on the slow job.
+    const staleTick = onTimer(state);
+    await Promise.resolve();
+    expect(state.running).toBe(true);
+
+    // Advance past the watchdog threshold and let a new tick take over.
+    currentMs = now + TICK_WATCHDOG_TEST_MS + 60_000;
+    await onTimer(state);
+    const generationAfterTakeover = state.tickGeneration;
+
+    // Simulate the successor being mid-flight again, then let the stale tick finish.
+    state.running = true;
+    state.tickStartedAtMs = currentMs;
+    deferredRun.resolve({ status: "ok", summary: "done" });
+    await staleTick;
+
+    // The displaced tick must not release `running` owned by the successor.
+    expect(state.running).toBe(true);
+    expect(state.tickGeneration).toBe(generationAfterTakeover);
+
+    state.running = false;
+    stopTimer(state);
     await store.cleanup();
   });
 });
