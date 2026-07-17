@@ -894,4 +894,108 @@ describe("handleMessageEnd", () => {
 
     expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
+
+  it("restores a bare NO_REPLY sentinel discarded by the final-tag gate as intentional silence", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts, emitBlockReply });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    // The model emitted a bare NO_REPLY without wrapping it in <final>, so the
+    // gate strips the whole reply to "" (the production regression fingerprint:
+    // discardedChars=8, zero payloads -> incomplete-turn error to the user).
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    // Sentinel restored so the turn flows through the silent-reply path
+    // (assistantTexts gets NO_REPLY -> incomplete-turn guard exempts it; the
+    // payload is suppressed downstream). No user-facing error is produced.
+    expect(finalizeAssistantTexts).toHaveBeenCalledTimes(1);
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    // A discarded sentinel is intentional silence, not lost content: no canary.
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("restores a whitespace-padded NO_REPLY sentinel discarded by the final-tag gate", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "  NO_REPLY\n" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
+  it("does not restore non-sentinel content discarded by the final-tag gate", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, {
+      enforceFinalTag: true,
+      agentId: "nutritionist-1",
+      sessionKey: "agent:nutritionist-1:main",
+    });
+    // Real "thinking out loud" the model forgot to wrap in <final>: this is lost
+    // content, not intentional silence, so it must NOT be treated as a sentinel.
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Locating the macros for this meal..." }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    // No sentinel restored (empty text keeps assistantTexts empty -> the
+    // incomplete-turn guard still surfaces its error for genuinely lost output).
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
+    // And the over-suppression canary still fires for real discarded content.
+    const warn = ctx.log.warn as unknown as ReturnType<typeof vi.fn>;
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("[final-tag]");
+  });
+
+  it("keeps a <final>-wrapped NO_REPLY flowing as a silent reply", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    // Model wrapped the sentinel correctly: the gate keeps the inner NO_REPLY,
+    // so strippedVisibleText is non-empty and the normal silent path applies.
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "NO_REPLY";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "<final>NO_REPLY</final>" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
 });
