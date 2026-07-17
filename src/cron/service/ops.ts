@@ -116,19 +116,22 @@ export async function start(state: CronServiceState) {
     }
   });
 
-  await runMissedJobs(state, {
-    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
-  });
-
+  // Arm the scheduler BEFORE startup catch-up runs, then run catch-up. Catch-up
+  // executes overdue jobs sequentially, and an isolated agentTurn can block for
+  // up to its timeout (~60 min by default). When armTimer was gated behind
+  // `await runMissedJobs(...)`, a single hung catch-up job left the timer
+  // unarmed and the entire scheduler silent — no ticks, no logs — until the next
+  // gateway restart (the 2026-07-16/17 "scheduler wedge" incident class).
+  //
+  // Arming first is safe. Catch-up's planning phase claims its jobs
+  // (runningAtMs) and defers the staggered overflow under the store lock within
+  // milliseconds, well before the first tick — which is floored to
+  // MIN_REFIRE_GAP_MS whenever a past-due job exists. Every tick also sets
+  // runningAtMs under the same lock before executing, so a tick that fires
+  // mid-catch-up skips the in-flight jobs and nothing double-runs. Cron start is
+  // dispatched fire-and-forget by the gateway, so awaiting catch-up below cannot
+  // block boot; a hang leaves this promise pending but the scheduler live.
   await locked(state, async () => {
-    // Startup catch-up already persisted the latest in-memory store state, and
-    // this path runs before the scheduler begins servicing regular timer ticks.
-    // Avoid an extra reload/write cycle on startup.
-    await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRuns(state);
-    if (changed) {
-      await persist(state);
-    }
     armTimer(state);
     state.deps.log.info(
       {
@@ -138,6 +141,23 @@ export async function start(state: CronServiceState) {
       },
       "cron: started",
     );
+  });
+
+  await runMissedJobs(state, {
+    skipJobIds: interruptedOneShotIds.size > 0 ? interruptedOneShotIds : undefined,
+  });
+
+  await locked(state, async () => {
+    // Startup catch-up already persisted the latest in-memory store state, and
+    // this path runs before the scheduler begins servicing regular timer ticks.
+    // Avoid an extra reload/write cycle on startup. Re-arm so the timer reflects
+    // any nextRunAtMs values that catch-up advanced.
+    await ensureLoaded(state, { skipRecompute: true });
+    const changed = recomputeNextRuns(state);
+    if (changed) {
+      await persist(state);
+    }
+    armTimer(state);
   });
 }
 
