@@ -89,7 +89,17 @@ function resolvePublicSurfaceLocation(params: {
     return publicSurfaceLocations.get(key) ?? null;
   }
   const resolved = resolvePublicSurfaceLocationUncached(params);
-  publicSurfaceLocations.set(key, resolved);
+  // Never memoize a null. A bundled public surface that fails to resolve is
+  // almost always a transient condition — fd pressure during a post-restart
+  // cron storm, or a dist file mid-write during `npm i -g` — not a permanent
+  // absence (the artifact ships in dist/extensions). Caching the null poisons
+  // every later lookup for the whole process lifetime, which on 2026-07-17
+  // cascaded into cron/nested agent-turn failures ("Unable to resolve bundled
+  // plugin public surface speech-core/runtime-api.js") and wedged the scheduler.
+  // Only memoize real hits; a miss retries on the next call.
+  if (resolved) {
+    publicSurfaceLocations.set(key, resolved);
+  }
   return resolved;
 }
 
