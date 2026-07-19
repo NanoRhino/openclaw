@@ -6,6 +6,7 @@ import {
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  applyBedrockSystemPromptCacheBoundary,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
@@ -218,9 +219,14 @@ function injectBedrockCachePoints(
   }
   const point = makeCachePoint(cacheRetention);
 
-  // Inject into system prompt if missing.
+  // Prefer splitting the system block at the OpenClaw cache boundary so the
+  // stable prefix caches independently of the dynamic tail. Falls back to a
+  // single end-of-system cache point when there is no boundary marker.
+  const repositioned = applyBedrockSystemPromptCacheBoundary(payload, cacheRetention);
+
+  // Inject into system prompt if missing (and not already handled at the boundary).
   const system = payload.system as BedrockContentBlock[] | undefined;
-  if (Array.isArray(system) && system.length > 0 && !hasCachePoint(system)) {
+  if (!repositioned && Array.isArray(system) && system.length > 0 && !hasCachePoint(system)) {
     system.push(point);
   }
 
@@ -360,11 +366,19 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const mayNeedCacheInjection =
         isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
 
+      // Regular Claude model IDs get their Converse cache points from pi-ai
+      // natively. pi-ai puts the system cache point at the very end of the system
+      // block, so any change in the dynamic tail below the OpenClaw cache boundary
+      // rewrites the whole system prefix each turn. Reposition it at the boundary.
+      const needsSystemBoundaryReposition = piAiWouldInjectCachePoints(modelId);
+
       // For known Anthropic models (heuristic match), enable injection immediately.
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
       const heuristicMatch = needsCachePointInjection(modelId);
 
-      if (!region && !mayNeedCacheInjection) {
+      const patchesPayload = mayNeedCacheInjection || needsSystemBoundaryReposition;
+
+      if (!region && !patchesPayload) {
         return wrapped;
       }
 
@@ -375,7 +389,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       return (streamModel, context, options) => {
         const merged = Object.assign({}, options, region ? { region } : {});
 
-        if (!mayNeedCacheInjection) {
+        if (!patchesPayload) {
           return underlying(streamModel, context, merged);
         }
 
@@ -389,6 +403,15 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         // want caching enabled, so defaulting to "short" is the safer behavior.
         const cacheRetention =
           typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
+
+        if (needsSystemBoundaryReposition) {
+          // Regular Claude model: pi-ai already emits the system + last-user cache
+          // points. Only move the system point to the OpenClaw cache boundary so the
+          // byte-stable prefix stops getting rewritten every turn.
+          return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
+            applyBedrockSystemPromptCacheBoundary(payload, cacheRetention);
+          });
+        }
 
         if (heuristicMatch) {
           // Fast path: ARN heuristic already identified this as Claude.
