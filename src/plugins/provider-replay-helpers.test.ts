@@ -85,6 +85,12 @@ describe("provider replay helpers", () => {
       "claude-sonnet-4-5-20250929",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001",
+      // Claude 5+ (family-version shape; the old /claude-[5-9]/ regex missed these)
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-haiku-5",
+      "global.anthropic.claude-sonnet-5",
+      "arn:aws:bedrock:us-east-1:969644818405:inference-profile/global.anthropic.claude-sonnet-5",
     ]) {
       const policy = buildAnthropicReplayPolicyForModel(modelId);
       expect(policy).not.toHaveProperty("dropThinkingBlocks");
