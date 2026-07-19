@@ -1,6 +1,75 @@
 import { describe, expect, it } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../system-prompt-cache-boundary.js";
-import { applyBedrockSystemPromptCacheBoundary } from "./bedrock-stream-wrappers.js";
+import {
+  applyBedrockLastUserCacheBoundary,
+  applyBedrockSystemPromptCacheBoundary,
+} from "./bedrock-stream-wrappers.js";
+
+describe("applyBedrockLastUserCacheBoundary", () => {
+  const point = (ttl?: string) => ({
+    cachePoint: ttl ? { type: "default", ttl } : { type: "default" },
+  });
+
+  it("moves the cache point before the current inbound and drops the last-user point", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: [{ text: "prior reply" }] },
+        {
+          role: "user",
+          content: [{ text: "Conversation info (untrusted metadata):\n...\n\nhi" }, point()],
+        },
+      ],
+    };
+
+    const changed = applyBedrockLastUserCacheBoundary(payload, "long");
+
+    expect(changed).toBe(true);
+    expect(payload.messages[1].content).toEqual([
+      { text: "Conversation info (untrusted metadata):\n...\n\nhi" },
+    ]);
+    expect(payload.messages[0].content).toEqual([{ text: "prior reply" }, point("1h")]);
+  });
+
+  it("repositions before the inbound even when tool results follow it", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: [{ text: "prior reply" }] },
+        { role: "user", content: [{ text: "log my lunch" }] },
+        { role: "assistant", content: [{ toolUse: { toolUseId: "t1", name: "meal", input: {} } }] },
+        { role: "user", content: [{ toolResult: { toolUseId: "t1", content: [] } }, point()] },
+      ],
+    };
+
+    const changed = applyBedrockLastUserCacheBoundary(payload, "short");
+
+    expect(changed).toBe(true);
+    expect(payload.messages[3].content).toEqual([{ toolResult: { toolUseId: "t1", content: [] } }]);
+    expect(payload.messages[0].content).toEqual([{ text: "prior reply" }, point()]);
+    expect(payload.messages[1].content).toEqual([{ text: "log my lunch" }]);
+  });
+
+  it("returns false and leaves the payload untouched when the inbound is first", () => {
+    const payload = {
+      messages: [{ role: "user", content: [{ text: "first message" }, point()] }],
+    };
+
+    const changed = applyBedrockLastUserCacheBoundary(payload, "long");
+
+    expect(changed).toBe(false);
+    expect(payload.messages[0].content).toEqual([{ text: "first message" }, point()]);
+  });
+
+  it("does nothing when cacheRetention is none", () => {
+    const payload = {
+      messages: [
+        { role: "assistant", content: [{ text: "a" }] },
+        { role: "user", content: [{ text: "b" }, point()] },
+      ],
+    };
+    expect(applyBedrockLastUserCacheBoundary(payload, "none")).toBe(false);
+    expect(payload.messages[1].content).toEqual([{ text: "b" }, point()]);
+  });
+});
 
 describe("applyBedrockSystemPromptCacheBoundary", () => {
   it("splits the system block at the boundary and drops the trailing cache point", () => {

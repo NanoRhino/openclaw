@@ -6,6 +6,7 @@ import {
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  applyBedrockLastUserCacheBoundary,
   applyBedrockSystemPromptCacheBoundary,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
@@ -230,17 +231,22 @@ function injectBedrockCachePoints(
     system.push(point);
   }
 
-  // Inject into the last user message if missing.
+  // Reposition the last-user cache point to sit BEFORE the current inbound user
+  // message so its per-turn "untrusted metadata" prefix stays outside the cached
+  // prefix. Falls back to an end-of-last-user point only when there is nothing to
+  // cache before the inbound (first message).
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
-  const messages = payload.messages as BedrockMessage[] | undefined;
-  if (Array.isArray(messages) && messages.length > 0) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role === "user" && Array.isArray(msg.content)) {
-        if (!hasCachePoint(msg.content)) {
-          msg.content.push(point);
+  if (!applyBedrockLastUserCacheBoundary(payload, cacheRetention)) {
+    const messages = payload.messages as BedrockMessage[] | undefined;
+    if (Array.isArray(messages) && messages.length > 0) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role === "user" && Array.isArray(msg.content)) {
+          if (!hasCachePoint(msg.content)) {
+            msg.content.push(point);
+          }
+          break;
         }
-        break;
       }
     }
   }
@@ -406,10 +412,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
         if (needsSystemBoundaryReposition) {
           // Regular Claude model: pi-ai already emits the system + last-user cache
-          // points. Only move the system point to the OpenClaw cache boundary so the
-          // byte-stable prefix stops getting rewritten every turn.
+          // points. Move the system point to the OpenClaw cache boundary and the
+          // last-user point to BEFORE the current inbound message (its per-turn
+          // untrusted-metadata prefix must stay outside the cached prefix), so
+          // neither breaks the byte-stable prefix every turn.
           return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
             applyBedrockSystemPromptCacheBoundary(payload, cacheRetention);
+            applyBedrockLastUserCacheBoundary(payload, cacheRetention);
           });
         }
 
