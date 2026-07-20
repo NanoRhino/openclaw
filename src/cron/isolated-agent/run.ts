@@ -35,6 +35,7 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
+import { buildRecentMainContext } from "./recent-main-context.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
   createPersistCronSessionEntry,
@@ -716,6 +717,16 @@ async function prepareCronRunContext(params: {
     commandBody = `${safeContent}\n\n${timeLine}`.trim();
   } else {
     commandBody = `${base}\n${timeLine}`.trim();
+  }
+  if (agentPayload?.recentMainContext) {
+    try {
+      const recentMainContext = await buildRecentMainContext({ agentId });
+      if (recentMainContext) {
+        commandBody = `${commandBody}\n\n${recentMainContext}`;
+      }
+    } catch (err) {
+      logWarn(`[cron:${input.job.id}] Failed to load recent local main context: ${String(err)}`);
+    }
   }
   commandBody = appendCronDeliveryInstruction({
     commandBody,

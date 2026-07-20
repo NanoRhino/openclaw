@@ -97,6 +97,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
+      .option("--recent-main-context", "Enable recent local main-session context")
+      .option("--no-recent-main-context", "Disable recent local main-session context")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
       .option("--announce", "Fallback-deliver final text to a chat")
@@ -243,6 +245,7 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(thinking) ||
             hasTimeoutSeconds ||
             typeof opts.lightContext === "boolean" ||
+            typeof opts.recentMainContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
             opts.clearTools ||
@@ -269,6 +272,12 @@ export function registerCronEditCommand(cron: Command) {
               "lightContext",
               opts.lightContext,
               typeof opts.lightContext === "boolean",
+            );
+            assignIf(
+              payload,
+              "recentMainContext",
+              opts.recentMainContext,
+              typeof opts.recentMainContext === "boolean",
             );
             if (opts.clearTools) {
               payload.toolsAllow = null;

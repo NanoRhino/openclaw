@@ -109,6 +109,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
+      .option(
+        "--recent-main-context",
+        "Inject recent visible messages from the local main session",
+        false,
+      )
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
@@ -167,6 +172,7 @@ export function registerCronAddCommand(cron: Command) {
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
               lightContext: opts.lightContext === true ? true : undefined,
+              recentMainContext: opts.recentMainContext === true ? true : undefined,
               toolsAllow: parseCronToolsAllow(opts.tools),
             };
           })();

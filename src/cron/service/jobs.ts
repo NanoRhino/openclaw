@@ -861,6 +861,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
   }
+  if (typeof patch.recentMainContext === "boolean") {
+    next.recentMainContext = patch.recentMainContext;
+  }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
@@ -888,6 +891,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
+    recentMainContext: patch.recentMainContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
 }
