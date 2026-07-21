@@ -80,4 +80,41 @@ describe("runEmbeddedPiAgent cron before_agent_reply seam", () => {
     expect(mockedGlobalHookRunner.runBeforeAgentReply).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
+
+  it("resolves final-tag enforcement inside the embedded runner for cron callers", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      config: {
+        ...overflowBaseRunParams.config,
+        agents: { defaults: { enforceFinalTag: true } },
+      },
+    });
+
+    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls.at(0) ?? []) as [
+      { enforceFinalTag?: boolean }?,
+    ];
+    expect(attemptParams?.enforceFinalTag).toBe(true);
+  });
+
+  it("keeps an explicit false override for embedded cron runs", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      config: {
+        ...overflowBaseRunParams.config,
+        agents: { defaults: { enforceFinalTag: true } },
+      },
+      enforceFinalTag: false,
+    });
+
+    const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls.at(0) ?? []) as [
+      { enforceFinalTag?: boolean }?,
+    ];
+    expect(attemptParams?.enforceFinalTag).toBe(false);
+  });
 });
