@@ -119,6 +119,7 @@ import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-poli
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
+import { resolveEmbeddedEnforceFinalTag } from "./run/final-tag.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -1361,7 +1362,15 @@ export async function runEmbeddedPiAgent(
             modelRun: params.modelRun,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
-            enforceFinalTag: params.enforceFinalTag,
+            enforceFinalTag: resolveEmbeddedEnforceFinalTag({
+              explicit: params.enforceFinalTag,
+              config: params.config,
+              agentId: workspaceResolution.agentId,
+              provider,
+              workspaceDir: resolvedWorkspace,
+              modelId,
+              model: effectiveModel,
+            }),
             silentExpected: params.silentExpected,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
