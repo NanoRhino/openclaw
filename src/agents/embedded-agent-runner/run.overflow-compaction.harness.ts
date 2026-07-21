@@ -573,6 +573,9 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveProviderAuthProfileId: vi.fn(() => undefined),
     prepareProviderExtraParams: vi.fn(async () => ({})),
     wrapProviderStreamFn: vi.fn((_cfg: unknown, _model: unknown, fn: unknown) => fn),
+    // resolveEmbeddedEnforceFinalTag -> isReasoningTagProvider consults the
+    // plugin reasoning-output override; undefined = no plugin override.
+    resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
   }));
 
   vi.doMock("../auth-profiles.js", () => ({
