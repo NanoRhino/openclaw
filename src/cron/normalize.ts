@@ -41,6 +41,7 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
     hasTrimmedStringValue(payload.thinking) ||
     typeof payload.timeoutSeconds === "number" ||
     typeof payload.lightContext === "boolean" ||
+    typeof payload.recentMainContext === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
 }
@@ -250,6 +251,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.thinking;
     delete next.timeoutSeconds;
     delete next.lightContext;
+    delete next.recentMainContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
   } else if (next.kind === "agentTurn") {
@@ -400,6 +402,12 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
     payload.lightContext = next.lightContext;
   }
   if (
+    typeof payload.recentMainContext !== "boolean" &&
+    typeof next.recentMainContext === "boolean"
+  ) {
+    payload.recentMainContext = next.recentMainContext;
+  }
+  if (
     typeof payload.allowUnsafeExternalContent !== "boolean" &&
     typeof next.allowUnsafeExternalContent === "boolean"
   ) {
@@ -413,6 +421,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.timeoutSeconds;
   delete next.fallbacks;
   delete next.lightContext;
+  delete next.recentMainContext;
   delete next.toolsAllow;
   delete next.allowUnsafeExternalContent;
   delete next.message;

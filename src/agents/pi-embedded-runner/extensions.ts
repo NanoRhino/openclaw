@@ -73,6 +73,7 @@ function resolveContextWindowTokens(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  agentId?: string;
 }): number {
   return resolveContextWindowInfo({
     cfg: params.cfg,
@@ -81,6 +82,7 @@ function resolveContextWindowTokens(params: {
     modelContextTokens: params.model?.contextTokens,
     modelContextWindow: params.model?.contextWindow,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
+    agentId: params.agentId, // patch-012: per-agent contextTokens cap
   }).tokens;
 }
 
@@ -90,6 +92,7 @@ function buildContextPruningFactory(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  agentId?: string;
 }): ExtensionFactory | undefined {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "cache-ttl") {
@@ -129,6 +132,7 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  agentId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -141,6 +145,7 @@ export function buildEmbeddedExtensionFactories(params: {
       modelContextTokens: params.model?.contextTokens,
       modelContextWindow: params.model?.contextWindow,
       defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      agentId: params.agentId, // patch-012: per-agent contextTokens cap
     });
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,

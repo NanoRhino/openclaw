@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { findNormalizedProviderValue } from "./provider-id.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 
 export const CONTEXT_WINDOW_HARD_MIN_TOKENS = 4_000;
 export const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
@@ -23,6 +24,28 @@ function normalizePositiveInt(value: unknown): number | null {
   return int > 0 ? int : null;
 }
 
+// patch-012: resolve the contextTokens cap with per-agent precedence.
+// agents.list[<agentId>].contextTokens wins; agents.defaults.contextTokens is
+// only the fallback. Previously only the defaults field was read, so per-agent
+// caps (e.g. 100000 on every wechat-dm agent) were silently ignored and the
+// effective limit fell back to the model's native window (200000) — compaction
+// then triggered far too late and context ballooned to ~250k.
+function resolvePerAgentContextCap(
+  cfg: OpenClawConfig | undefined,
+  agentId: string | undefined,
+): number | null {
+  if (agentId) {
+    const list = Array.isArray(cfg?.agents?.list) ? cfg?.agents?.list : [];
+    const want = normalizeAgentId(agentId);
+    const match = list?.find((a) => normalizeAgentId(a?.id) === want);
+    const perAgent = normalizePositiveInt(match?.contextTokens);
+    if (perAgent) {
+      return perAgent;
+    }
+  }
+  return normalizePositiveInt(cfg?.agents?.defaults?.contextTokens);
+}
+
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -30,6 +53,7 @@ export function resolveContextWindowInfo(params: {
   modelContextTokens?: number;
   modelContextWindow?: number;
   defaultTokens: number;
+  agentId?: string;
 }): ContextWindowInfo {
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
@@ -54,7 +78,7 @@ export function resolveContextWindowInfo(params: {
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: defaultTokens, source: "default" as const };
 
-  const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
+  const capTokens = resolvePerAgentContextCap(params.cfg, params.agentId);
   if (capTokens && capTokens < baseInfo.tokens) {
     return { tokens: capTokens, referenceTokens: baseInfo.tokens, source: "agentContextTokens" };
   }

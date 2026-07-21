@@ -156,10 +156,19 @@ export function buildGatewayCronService(params: {
       typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
     const effectiveConfig =
       normalized !== undefined ? mergeRuntimeAgentConfig(runtimeConfig, normalized) : runtimeConfig;
-    const agentId =
-      normalized !== undefined && hasConfiguredAgent(effectiveConfig, normalized)
-        ? normalized
-        : resolveDefaultAgentId(effectiveConfig);
+    // Trust the requested agentId (sourced from jobs.json — the on-disk source
+    // of truth recorded when the job was created). Previously this fell back
+    // to `resolveDefaultAgentId(effectiveConfig)` when the agent was missing
+    // from the runtime snapshot, which silently rerouted the job onto the
+    // default agent (typically "main"). With dynamically-registered agents
+    // (e.g. wechat-dm-*) that are added to the on-disk config *after* gateway
+    // startup, the runtime snapshot lags behind disk until the next restart —
+    // so a perfectly valid job.agentId could miss the snapshot lookup and get
+    // rerouted to a privileged agent that reply-filter excludes from
+    // filtering. Per-agent overrides (model/workspace/etc.) still come from
+    // effectiveConfig via resolveAgentConfig; a missing entry just means
+    // "use defaults", not "use a different agent".
+    const agentId = normalized ?? resolveDefaultAgentId(effectiveConfig);
     return { agentId, cfg: effectiveConfig };
   };
 

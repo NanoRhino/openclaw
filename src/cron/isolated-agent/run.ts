@@ -35,6 +35,7 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
+import { buildRecentMainContext } from "./recent-main-context.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import {
   createPersistCronSessionEntry,
@@ -717,6 +718,16 @@ async function prepareCronRunContext(params: {
   } else {
     commandBody = `${base}\n${timeLine}`.trim();
   }
+  if (agentPayload?.recentMainContext) {
+    try {
+      const recentMainContext = await buildRecentMainContext({ agentId });
+      if (recentMainContext) {
+        commandBody = `${commandBody}\n\n${recentMainContext}`;
+      }
+    } catch (err) {
+      logWarn(`[cron:${input.job.id}] Failed to load recent local main context: ${String(err)}`);
+    }
+  }
   commandBody = appendCronDeliveryInstruction({
     commandBody,
     deliveryRequested,
@@ -946,6 +957,18 @@ async function finalizeCronRun(params: {
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
     ).preferFinalAssistantVisibleText,
   });
+  // If a before_agent_run hook blocked the run intentionally (e.g. a plugin decided
+  // there's nothing to do this tick), treat it as `skipped` instead of `error` so we
+  // don't accumulate consecutiveErrors, trigger backoff, or fire failure alerts. The
+  // hook already prevented any user-visible output — pretending it failed spams the
+  // ops channel and slows the schedule.
+  const isHookBlockedRun = finalRunResult.meta?.error?.kind === "hook_block";
+  const treatAsSkipped = isHookBlockedRun && hasFatalErrorPayload;
+  const outcomeStatus: "ok" | "error" | "skipped" = treatAsSkipped
+    ? "skipped"
+    : hasFatalErrorPayload
+      ? "error"
+      : "ok";
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -955,12 +978,14 @@ async function finalizeCronRun(params: {
     delivery?: CronDeliveryTrace;
   }) =>
     prepared.withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
+      status: outcomeStatus,
       ...(hasFatalErrorPayload
         ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
         : {}),
       summary,
-      outputText,
+      // Suppress the hook-block error payload from outputText so `sent reply` /
+      // delivery bookkeeping never sees "Your message could not be sent: ...".
+      outputText: treatAsSkipped ? undefined : outputText,
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
       delivery: result?.delivery,
@@ -982,6 +1007,14 @@ async function finalizeCronRun(params: {
     }
   };
 
+  // Short-circuit delivery entirely when a before_agent_run hook blocked the run.
+  // Otherwise the hook-block "Your message could not be sent: ..." payload would
+  // reach dispatchCronDelivery, be sent to reply-filter twice, and rely on the LLM
+  // classifier to drop it — a fragile fail-open. Returning early keeps user-facing
+  // channels 100% silent for intentional pre-run skips.
+  if (treatAsSkipped) {
+    return resolveRunOutcome({ delivered: false, deliveryAttempted: false });
+  }
   const skipHeartbeatDelivery =
     prepared.deliveryRequested &&
     !hasFatalErrorPayload &&

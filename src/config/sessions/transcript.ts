@@ -234,6 +234,48 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   });
 }
 
+/**
+ * Mirror a message into a session transcript with the REAL `role:"user"`.
+ * Symmetric to appendAssistantMessageToSessionTranscript. Used by human-handoff
+ * to record the user's own messages during a human takeover, so that after
+ * switching back the agent reads them exactly like normal inbound user turns
+ * (correct role → correct understanding of references/follow-ups), rather than
+ * assistant+prefix. Goes through the same resolve/idempotency/append path; no
+ * agent turn is triggered.
+ */
+export async function appendUserMessageToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  text: string;
+  idempotencyKey?: string;
+  storePath?: string;
+  updateMode?: SessionTranscriptUpdateMode;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+}): Promise<SessionTranscriptAppendResult> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+  const text = (params.text ?? "").trim();
+  if (!text) {
+    return { ok: false, reason: "empty text" };
+  }
+  return appendExactAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey,
+    storePath: params.storePath,
+    idempotencyKey: params.idempotencyKey,
+    updateMode: params.updateMode,
+    config: params.config,
+    // user message shape matches normal inbound: only role/content/timestamp.
+    message: {
+      role: "user" as const,
+      content: [{ type: "text", text }],
+      timestamp: Date.now(),
+    } as unknown as SessionTranscriptAssistantMessage,
+  });
+}
+
 export async function appendExactAssistantMessageToSessionTranscript(params: {
   agentId?: string;
   sessionKey: string;
@@ -247,8 +289,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (!sessionKey) {
     return { ok: false, reason: "missing sessionKey" };
   }
-  if (params.message.role !== "assistant") {
-    return { ok: false, reason: "message role must be assistant" };
+  // human-handoff 需要以真实 role:"user" 镜像人工接管期用户消息(见 plugin-sdk
+  // appendUserMessageToSessionTranscript)。放宽到 assistant | user;其余角色仍拒。
+  if (params.message.role !== "assistant" && params.message.role !== "user") {
+    return { ok: false, reason: "message role must be assistant or user" };
   }
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);

@@ -12,6 +12,9 @@ import {
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
@@ -20,6 +23,12 @@ import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -27,6 +36,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -372,19 +382,109 @@ function shouldQueueCronAwareness(params: {
   );
 }
 
-function resolveCronAwarenessMainSessionKey(params: {
+// [patch-003 v5] Resolve the awareness sessionKey for cron announce delivery.
+// Exported for unit tests; production callers use it via queueCronAwarenessSystemEvent.
+// Channel extensions (wechat/wecom) route real user chats through channel-scoped
+// session keys (agent:<id>:wechat:default:direct:<peerId>,
+// agent:<id>:wecom:direct:<userid>, etc.). When users replied to cron pushes, the
+// agent had no context. We look up the active chat session matching (channel, to)
+// from the agent's session store, falling back to :main if no match is found.
+//
+// Case-insensitive match: wechat cron delivery.to is normalized to lowercase by
+// jobs.json migration, while session deliveryContext.to retains the original
+// mixed-case form from inbound — strict equality always fails for wechat. We
+// compare on lowercased forms.
+//
+// Score-based selection: when multiple session keys share the same to (lowercased),
+// canonical actively-used forms (:<channel>:default:direct:<to>) win over legacy
+// bare forms (:direct:<to> without channel/default segments) and degraded forms
+// (:<channel>:direct:<to> without :default:). Within the same score, recency
+// (lastInteractionAt) breaks the tie.
+export function resolveCronAwarenessSessionKey(params: {
   cfg: OpenClawConfig;
   agentId: string;
-}): string {
-  return params.cfg.session?.scope === "global"
-    ? resolveMainSessionKey(params.cfg)
-    : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+  delivery: SuccessfulDeliveryTarget;
+}): { sessionKey: string; reason: "active" | "fallback" } {
+  const fallback =
+    params.cfg.session?.scope === "global"
+      ? resolveMainSessionKey(params.cfg)
+      : resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+
+  // Need explicit channel + to to look up matching active session.
+  if (!params.delivery.to || !params.delivery.channel) {
+    return { sessionKey: fallback, reason: "fallback" };
+  }
+
+  try {
+    const storePath = resolveDefaultSessionStorePath(params.agentId);
+    const store = loadSessionStore(storePath);
+    if (!store) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+
+    const targetChannel = normalizeMessageChannel(params.delivery.channel);
+    if (!targetChannel) {
+      return { sessionKey: fallback, reason: "fallback" };
+    }
+    const toLc = String(params.delivery.to).toLowerCase();
+    const chLc = targetChannel.toLowerCase();
+
+    const scoreSessionKey = (lc: string): number => {
+      // Group chat: agent:<id>:<channel>:group:<groupId>
+      // Matches when the cron is targeted at the same group id on the same channel.
+      if (chLc && lc.indexOf(":" + chLc + ":group:" + toLc) >= 0) return 5;
+      // Must be a direct key for this peer. -1 = not a matching peer.
+      if (!lc.endsWith(":direct:" + toLc) && lc.indexOf(":direct:" + toLc) < 0) return -1;
+      // Canonical active format: agent:<id>:<channel>:default:direct:<to>
+      if (chLc && lc.indexOf(":" + chLc + ":default:direct:") >= 0) return 4;
+      // Less specific canonical: agent:<id>:default:direct:<to>
+      if (lc.indexOf(":default:direct:") >= 0) return 3;
+      // Legacy bare format: agent:<id>:direct:<to> (no channel/default segments).
+      // Heuristic: not a known channel form and not a wechat-degraded form.
+      if (lc.indexOf(":default:") < 0 && lc.indexOf(":wechat:") < 0) return 2;
+      // Degraded: agent:<id>:<channel>:direct:<to> (channel but no :default:)
+      return 1;
+    };
+
+    let match: string | null = null;
+    let matchScore = -1;
+    let matchTs = -1;
+    for (const [sk, entry] of Object.entries(store)) {
+      const parsed = parseAgentSessionKey(sk);
+      if (!parsed || parsed.agentId !== params.agentId.toLowerCase()) continue;
+      if (isCronSessionKey(sk) || isAcpSessionKey(sk) || isSubagentSessionKey(sk)) continue;
+
+      const lc = sk.toLowerCase();
+      const score = scoreSessionKey(lc);
+      if (score < 0) continue;
+
+      const ts =
+        Number(
+          (entry as { lastInteractionAt?: number; updatedAt?: number; sessionStartedAt?: number })
+            .lastInteractionAt ??
+            (entry as { updatedAt?: number }).updatedAt ??
+            (entry as { sessionStartedAt?: number }).sessionStartedAt ??
+            0,
+        ) || 0;
+      if (score > matchScore || (score === matchScore && ts >= matchTs)) {
+        matchScore = score;
+        matchTs = ts;
+        match = sk;
+      }
+    }
+    if (match) return { sessionKey: match, reason: "active" };
+  } catch {
+    return { sessionKey: fallback, reason: "fallback" };
+  }
+
+  return { sessionKey: fallback, reason: "fallback" };
 }
 
 async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
+  delivery: SuccessfulDeliveryTarget;
   deliveryIdempotencyKey: string;
   outputText?: string;
   synthesizedText?: string;
@@ -398,19 +498,33 @@ async function queueCronAwarenessSystemEvent(params: {
     return;
   }
 
+  const resolved = resolveCronAwarenessSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    delivery: params.delivery,
+  });
+
+  // [patch-003 v4] Persist cron output as an assistant message in the user's
+  // channel session transcript, so the agent naturally treats it as "something
+  // I said earlier" (same idea as the legacy patch:announce-inject chat.inject
+  // path). This replaces the older enqueueSystemEvent path which queued a
+  // one-shot ephemeral system event that the agent treated as a system notice
+  // rather than its own turn — leading to "user replies to a reminder and the
+  // agent has no idea what the reminder said".
   try {
-    const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
-    enqueueSystemEvent(text, {
-      sessionKey: resolveCronAwarenessMainSessionKey({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      }),
-      contextKey: params.deliveryIdempotencyKey,
-      trusted: false,
+    const result = await appendAssistantMessageToSessionTranscript({
+      agentId: params.agentId,
+      sessionKey: resolved.sessionKey,
+      text,
+      idempotencyKey: params.deliveryIdempotencyKey,
+      config: params.cfg.session,
     });
+    await logCronDeliveryWarn(
+      `[cron:${params.jobId}] [patch-003 v4] awareness inject: sessionKey=${resolved.sessionKey} reason=${resolved.reason} ok=${result?.ok ?? false}`,
+    );
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to inject cron awareness (sessionKey=${resolved.sessionKey} reason=${resolved.reason}): ${formatErrorMessage(err)}`,
     );
   }
 }
@@ -717,6 +831,7 @@ export async function dispatchCronDelivery(
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
+          delivery,
           deliveryIdempotencyKey,
           outputText,
           synthesizedText,

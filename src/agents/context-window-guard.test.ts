@@ -171,6 +171,63 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
+  it("patch-012: per-agent contextTokens wins over defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: { contextTokens: 200_000 },
+        list: [{ id: "wechat-dm-abc", contextTokens: 100_000 }],
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+      agentId: "wechat-dm-abc",
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(100_000);
+    expect(info.referenceTokens).toBe(200_000);
+  });
+
+  it("patch-012: falls back to defaults when agent has no contextTokens", () => {
+    const cfg = {
+      agents: {
+        defaults: { contextTokens: 150_000 },
+        list: [{ id: "wechat-dm-abc" }],
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+      agentId: "wechat-dm-abc",
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(150_000);
+  });
+
+  it("patch-012: falls back to defaults when no agentId passed (legacy behavior)", () => {
+    const cfg = {
+      agents: {
+        defaults: { contextTokens: 150_000 },
+        list: [{ id: "wechat-dm-abc", contextTokens: 100_000 }],
+      },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("agentContextTokens");
+    expect(info.tokens).toBe(150_000);
+  });
+
   it("does not override when cap exceeds base window", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 128_000 } },

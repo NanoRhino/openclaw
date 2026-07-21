@@ -589,8 +589,27 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // Only recompute if nextRunAtMs is missing or already past-due.
     // Preserving a still-future nextRunAtMs avoids accidentally advancing
     // a job that hasn't fired yet (e.g. during restart recovery).
+    //
+    // patch-024: 当 nextRun 过期但对应 slot 尚未执行(lastRun < nextRun)时,保留原
+    // nextRun 让 scheduler 立即 catch-up 触发. 之前直接 recompute 会从当前时刻算
+    // 下一个 slot, 导致这次 slot 被永久跳过. 与 recomputeNextRunsForMaintenance
+    // 的 alreadyExecutedSlot 保护对齐 (jobs.ts:631-644 已有此保护).
+    //
+    // 实证 (2026-07-03): 4 个 dinner reminder job (46/47 17 * * *) 在 07-02 触发
+    // 完 lastRun=07-02 17:47, nextRun 正确设为 07-03 17:46. 07-03 17:46 到点时
+    // scheduler 在处理 43/45 17 的积压还没轮到, 紧接着 17:48:22 新用户 cron.add
+    // 触发 ops.ts add() → recomputeNextRuns → 遍历所有 job → 4 个 dinner job
+    // now(17:48) >= nextRun(17:46) 判过期 → 从 17:48 算 next = 07-04 17:46
+    // 直接跳过 07-03 那次触发, 4 个用户当天没收到 dinner 提醒.
     const nextRun = job.state.nextRunAtMs;
-    const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
+    const isMissing = !hasScheduledNextRunAtMs(nextRun);
+    const isExpired = hasScheduledNextRunAtMs(nextRun) && now >= nextRun;
+    const lastRun = job.state.lastRunAtMs;
+    // slot 已执行 = 上次运行时刻 ≥ 当前 nextRun. 反之意味着 nextRun 到点但没跑过,
+    // 属于"到点没触发", 保留原 nextRun 让 timer 立即 catch-up, 不要推进.
+    const alreadyExecutedSlot =
+      hasScheduledNextRunAtMs(nextRun) && isFiniteTimestamp(lastRun) && lastRun >= nextRun;
+    const isDueOrMissing = isMissing || (isExpired && alreadyExecutedSlot);
     if (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
@@ -842,6 +861,9 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
   }
+  if (typeof patch.recentMainContext === "boolean") {
+    next.recentMainContext = patch.recentMainContext;
+  }
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
@@ -869,6 +891,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
+    recentMainContext: patch.recentMainContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
 }

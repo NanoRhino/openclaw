@@ -59,7 +59,11 @@ describe("resolvePreparedReplyQueueState", () => {
     });
   });
 
-  it("rechecks after wait and returns shutdown reply when still busy", async () => {
+  it("returns shutdown reply when still active after a single wait (reset 兜底)", async () => {
+    // patch-010 的多次重试已废弃:连发 interrupt 改走 enqueue-followup + drain,
+    // 不再经过这里。此函数现在只剩 reset(/new、/reset)会走到,保留框架原始的
+    // "等一次仍 active 才保底提示"语义 —— reset 低频用户主动操作,极少触发。
+    const waitForActiveRunEnd = vi.fn(async () => undefined);
     const result = await resolvePreparedReplyQueueState({
       activeRunQueueAction: "run-now",
       activeSessionId: "session-active",
@@ -67,7 +71,7 @@ describe("resolvePreparedReplyQueueState", () => {
       sessionKey: "session-key",
       sessionId: "session-1",
       abortActiveRun: vi.fn(() => true),
-      waitForActiveRunEnd: vi.fn(async () => undefined),
+      waitForActiveRunEnd,
       refreshPreparedState: vi.fn(async () => undefined),
       resolveBusyState: () => ({
         activeSessionId: "session-after-wait",
@@ -76,6 +80,8 @@ describe("resolvePreparedReplyQueueState", () => {
       }),
     });
 
+    // 只等一次,不再重试
+    expect(waitForActiveRunEnd).toHaveBeenCalledOnce();
     expect(result).toEqual({
       kind: "reply",
       reply: {

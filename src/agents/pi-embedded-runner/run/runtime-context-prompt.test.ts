@@ -140,4 +140,75 @@ describe("runtime context prompt submission", () => {
     expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
     expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
   });
+
+  // ── A1a: orphan user text 不走 runtime-context ─────────────────────────────
+  //
+  // 2026-07-06 Morii 案 root cause: mergeOrphanedTrailingUserPrompt 生成的
+  // effectivePrompt 以 QUEUED marker 打头。老 resolveRuntimeContextPromptParts
+  // 把 [QUEUED marker + orphan text] 切进 runtimeContext, 后续 turn 组装
+  // messages 时 stripHistoricalRuntimeContextCustomMessages 按 lastUserIndex
+  // 剔除, 导致 orphan text 内容永久丢失(agent 看不到"叫我玖玖")。
+  //
+  // 修法: orphan 段落识别后, orphan text 拼进 prompt(transcript 侧), runtime-
+  // context 不带 QUEUED marker。这样 orphan text 变成消息树上真 user 节点的
+  // content, 不再依赖会被 strip 的 runtime-context 承载。
+  it("merges orphaned user text into the visible prompt instead of runtime context", () => {
+    const orphanText = "叫我玖玖";
+    const newUserText = "你不是有个软件吗？那个软件怎么下载呀";
+    const queuedMarker =
+      "[Queued user message that arrived while the previous turn was still active]";
+
+    // mergeOrphanedTrailingUserPrompt 生成的 effectivePrompt 形态
+    const effectivePrompt = [queuedMarker, orphanText, "", newUserText].join("\n");
+
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt,
+      transcriptPrompt: newUserText,
+    });
+
+    // orphan text 进 prompt(会写进消息树的 user 节点), 不进 runtimeContext
+    expect(parts.prompt).toContain(orphanText);
+    expect(parts.prompt).toContain(newUserText);
+    // QUEUED marker 是运维标记, 不应流入 user 消息
+    expect(parts.prompt).not.toContain(queuedMarker);
+    // runtimeContext 要么没有, 要么不含 orphan text(否则等于回到老 bug)
+    if (parts.runtimeContext !== undefined) {
+      expect(parts.runtimeContext).not.toContain(orphanText);
+      expect(parts.runtimeContext).not.toContain(queuedMarker);
+    }
+  });
+
+  it("keeps non-orphan runtime context in the hidden channel(回归安全)", () => {
+    // 老场景:纯粹的 runtime-context 内容(不是 orphan)不受影响
+    // effectivePrompt 头部含一段既不是 QUEUED marker 也不是 delimited block 的 prefix
+    const effectivePrompt = ["runtime prefix", "", "visible ask"].join("\n");
+
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt,
+      transcriptPrompt: "visible ask",
+    });
+
+    expect(parts.prompt).toBe("visible ask");
+    expect(parts.runtimeContext).toBe("runtime prefix");
+  });
+
+  it("runtime-only event 场景不走 orphan 分支(prompt 空 → 保留 runtime-only)", () => {
+    // transcriptPrompt 为空 = 系统触发的 runtime event, orphan 内容应保留在
+    // runtimeContext 里走 runtime-only 分支, 不能被误当"user prompt 附加内容"。
+    // 若强行拼进 prompt, 下游 messages 状态会异常。
+    const queuedMarker =
+      "[Queued user message that arrived while the previous turn was still active]";
+    const effectivePrompt = [queuedMarker, "叫我yvon", "", "some runtime event body"].join("\n");
+
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt,
+      transcriptPrompt: "",
+    });
+
+    // 空 prompt → 走 runtime-only, prompt 是固定标记
+    expect(parts.prompt).toBe("Continue the OpenClaw runtime event.");
+    expect(parts.runtimeOnly).toBe(true);
+    // orphan 内容不擅自剥离, 完整跟 runtime event body 一起进 runtimeContext
+    expect(parts.runtimeContext).toContain("叫我yvon");
+  });
 });

@@ -36,6 +36,11 @@ export async function resolvePreparedReplyQueueState(params: {
     );
   }
 
+  // 此函数现在只剩 reset(/new、/reset)会走到(reset 被强制当 interrupt 处理且仍
+  // run-now —— 它要换 session、立刻在新上下文响应,不入队)。连发场景的 interrupt
+  // 已改走 enqueue-followup + drain(见 queue-policy.ts),不再经过这里,patch-010
+  // 那套"abort 后等待重试 → 耗尽放弃 → still-shutting-down 静默漏回"已废弃删除。
+  // reset 是低频用户主动操作,保留框架原始的"等一次,仍 active 才保底提示"语义即可。
   await params.waitForActiveRunEnd(params.activeSessionId);
   await params.refreshPreparedState();
   const refreshedBusyState = params.resolveBusyState();
