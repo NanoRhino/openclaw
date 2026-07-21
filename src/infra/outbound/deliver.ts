@@ -1,4 +1,5 @@
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { filterReplyText } from "../../auto-reply/reply/reply-filter.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -1425,6 +1426,26 @@ async function deliverOutboundPayloadsCore(
     payloads.forEach((_payload, index) => {
       recordPayloadOutcome(suppressedPayloadOutcome({ index, reason: "no_visible_payload" }));
     });
+  }
+  // patch-002: reply filter (delivery chokepoint).
+  // Final stop before each text payload reaches the channel handler.
+  // Drops or rewrites paragraphs flagged as agent-internal narration / tool
+  // references / meta-summary so end users never see them.
+  {
+    const _rfKey = params.mirror?.sessionKey ?? params.session?.key;
+    for (let _i = normalizedPayloads.length - 1; _i >= 0; _i--) {
+      const _entry = normalizedPayloads[_i];
+      const _text = _entry?.payload?.text;
+      if (_text) {
+        const _fr = await filterReplyText(_text, params.cfg, _rfKey);
+        if (_fr.drop) {
+          normalizedPayloads.splice(_i, 1);
+          continue;
+        }
+        _entry.payload = { ..._entry.payload, text: _fr.text };
+      }
+    }
+    if (normalizedPayloads.length === 0) return [];
   }
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
