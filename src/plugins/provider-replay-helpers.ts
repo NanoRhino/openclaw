@@ -93,8 +93,12 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
     return true;
   }
 
-  // Future-proofing: claude-5-x, claude-6-x etc. should also preserve
-  if (/claude-[5-9]/.test(id) || /claude-\d{2,}/.test(id)) {
+  // Claude 5+ models (claude-<family>-5, -6, ...). The version digit follows the
+  // family segment (claude-sonnet-5), not claude- directly, so match the
+  // family-version shape. Mirrors patch 009's supportsPromptCaching regex; the
+  // old /claude-[5-9]/ never matched claude-sonnet-5 and silently dropped
+  // thinking blocks, breaking prompt-cache prefix matching on the whole fleet.
+  if (/claude-[a-z]+-(?:[5-9]|\d{2,})(?:[-.]|$)/.test(id)) {
     return true;
   }
 

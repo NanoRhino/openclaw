@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../src/agents/system-prompt-cache-boundary.js";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { buildPluginApi } from "../../src/plugins/api-builder.js";
 import type { PluginRuntime } from "../../src/plugins/runtime/types.js";
@@ -597,7 +598,8 @@ describe("amazon-bedrock provider plugin", () => {
       };
 
       // Regular model IDs contain "claude" so pi-ai handles caching natively.
-      // wrapStreamFn should not install an onPayload hook for these.
+      // wrapStreamFn installs a boundary-reposition onPayload for these, but it is
+      // a no-op when the system block carries no OpenClaw cache boundary marker.
       const wrapped = provider.wrapStreamFn?.({
         provider: "amazon-bedrock",
         modelId: ANTHROPIC_MODEL,
@@ -608,11 +610,11 @@ describe("amazon-bedrock provider plugin", () => {
         cacheRetention: "short",
       }) as unknown as Record<string, unknown>;
 
-      // For regular Anthropic models, no onPayload should be installed for cache injection.
       if (typeof result?.onPayload === "function") {
         (result.onPayload as (p: Record<string, unknown>) => void)(payload);
       }
 
+      // No marker -> patch leaves pi-ai's native cache points untouched.
       const system = payload.system as Array<Record<string, unknown>>;
       expect(system).toHaveLength(1);
     });
@@ -804,6 +806,108 @@ describe("amazon-bedrock provider plugin", () => {
         { cachePoint: { type: "default" } },
       ]);
       expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("system cache boundary repositioning (regular Claude models)", () => {
+    /**
+     * Regular Claude Bedrock model IDs get their cache points from pi-ai
+     * natively (system end + last user). This exercise captures the pi-ai-shaped
+     * payload through the reposition onPayload the plugin installs.
+     */
+    function patchRegularClaudePayload(
+      provider: RegisteredProviderPlugin,
+      options: Record<string, unknown>,
+      payload: Record<string, unknown>,
+    ): void {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "amazon-bedrock",
+        modelId: ANTHROPIC_MODEL,
+        streamFn: spyStreamFn,
+      } as never);
+      const result = wrapped?.(
+        ANTHROPIC_MODEL_DESCRIPTOR,
+        { messages: [] } as never,
+        options,
+      ) as unknown as Record<string, unknown>;
+      if (typeof result?.onPayload === "function") {
+        (result.onPayload as (p: Record<string, unknown>) => void)(payload);
+      }
+    }
+
+    it("moves the system cache point to the boundary and drops the trailing point", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        // pi-ai serializes the whole system prompt into one text block with a
+        // single trailing cache point after the dynamic tail.
+        system: [
+          { text: `STABLE PREFIX${SYSTEM_PROMPT_CACHE_BOUNDARY}DYNAMIC TAIL` },
+          { cachePoint: { type: "default" } },
+        ],
+        messages: [
+          { role: "user", content: [{ text: "Hi" }, { cachePoint: { type: "default" } }] },
+        ],
+      };
+
+      patchRegularClaudePayload(provider, { cacheRetention: "short" }, payload);
+
+      // Split at the boundary: stable prefix caches independently, dynamic tail
+      // sits after the cache point, and pi-ai's end-of-system point is dropped.
+      expect(payload.system).toEqual([
+        { text: "STABLE PREFIX" },
+        { cachePoint: { type: "default" } },
+        { text: "DYNAMIC TAIL" },
+      ]);
+      // Last-user cache point (added by pi-ai) is left intact.
+      const messages = payload.messages as Array<{ content: Array<Record<string, unknown>> }>;
+      expect(messages[0].content).toEqual([{ text: "Hi" }, { cachePoint: { type: "default" } }]);
+    });
+
+    it("propagates long TTL to the repositioned cache point", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [
+          { text: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}TAIL` },
+          { cachePoint: { type: "default", ttl: "1h" } },
+        ],
+        messages: [{ role: "user", content: [{ text: "Hi" }] }],
+      };
+
+      patchRegularClaudePayload(provider, { cacheRetention: "long" }, payload);
+
+      expect(payload.system).toEqual([
+        { text: "STABLE" },
+        { cachePoint: { type: "default", ttl: "1h" } },
+        { text: "TAIL" },
+      ]);
+    });
+
+    it("leaves pi-ai's placement untouched when there is no boundary marker", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "No boundary here" }, { cachePoint: { type: "default" } }],
+        messages: [{ role: "user", content: [{ text: "Hi" }] }],
+      };
+
+      patchRegularClaudePayload(provider, { cacheRetention: "short" }, payload);
+
+      expect(payload.system).toEqual([
+        { text: "No boundary here" },
+        { cachePoint: { type: "default" } },
+      ]);
+    });
+
+    it("does not reposition when cacheRetention is none", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}TAIL` }],
+        messages: [{ role: "user", content: [{ text: "Hi" }] }],
+      };
+
+      patchRegularClaudePayload(provider, { cacheRetention: "none" }, payload);
+
+      // Marker left in place (no caching requested); no split performed.
+      expect(payload.system).toEqual([{ text: `STABLE${SYSTEM_PROMPT_CACHE_BOUNDARY}TAIL` }]);
     });
   });
 });

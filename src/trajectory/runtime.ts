@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
+import { boundTrajectoryEventData } from "./bound-event-data.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
 type TrajectoryRuntimeInit = {
@@ -234,6 +235,11 @@ export function createTrajectoryRuntimeRecorder(
     enabled: true,
     filePath,
     recordEvent: (type, data) => {
+      // Bound oversized fields (e.g. the full transcript in context.compiled /
+      // prompt.submitted / model.completed) *before* the deep clone + stringify,
+      // so whale sessions do not allocate multi-MB transients per event only to
+      // have them discarded by the post-hoc size check below.
+      const boundedData = data ? boundTrajectoryEventData(data) : undefined;
       const event: TrajectoryEvent = {
         traceSchema: "openclaw-trajectory",
         schemaVersion: 1,
@@ -250,7 +256,9 @@ export function createTrajectoryRuntimeRecorder(
         provider: params.provider,
         modelId: params.modelId,
         modelApi: params.modelApi,
-        data: data ? (sanitizeDiagnosticPayload(data) as Record<string, unknown>) : undefined,
+        data: boundedData
+          ? (sanitizeDiagnosticPayload(boundedData) as Record<string, unknown>)
+          : undefined,
       };
       const line = safeJsonStringify(event);
       if (!line) {

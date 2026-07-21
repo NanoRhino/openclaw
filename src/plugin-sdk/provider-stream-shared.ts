@@ -458,6 +458,8 @@ export {
 } from "../agents/copilot-dynamic-headers.js";
 export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
 export {
+  applyBedrockLastUserCacheBoundary,
+  applyBedrockSystemPromptCacheBoundary,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
 } from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
