@@ -156,6 +156,7 @@ import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
+import { evictHistoryImagesFromSessionFile } from "../evict-transcript-images.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import {
   applyExtraParamsToAgent,
@@ -1209,6 +1210,12 @@ export async function runEmbeddedAttempt(
           model: params.model,
         });
 
+      // Reclaim analyzed history-photo base64 from the transcript before it is
+      // read into memory: SessionManager.open re-reads the file every run, so
+      // rewriting it here evicts the base64 from both disk and the resident
+      // branch index. Best-effort; the current-turn image (not yet in the file)
+      // is untouched. Runs after repair so the file is well-formed.
+      await evictHistoryImagesFromSessionFile(params.sessionFile);
       await prewarmSessionFile(params.sessionFile);
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,

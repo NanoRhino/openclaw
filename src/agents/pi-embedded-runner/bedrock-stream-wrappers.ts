@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
@@ -7,6 +6,7 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../system-prompt-cache-boundary.js";
 import { isAnthropicBedrockModel } from "./anthropic-family-cache-semantics.js";
+import { historyImagePlaceholderText, imageContentHash8 } from "./history-image-placeholder.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -60,26 +60,26 @@ function isConverseInboundUserMessage(message: BedrockPayloadMessage): boolean {
 function hashConverseImage(image: Record<string, unknown>): string {
   const source = image.source as { bytes?: unknown } | undefined;
   const bytes = source?.bytes;
-  const hash = crypto.createHash("sha256");
   if (bytes instanceof Uint8Array) {
-    hash.update(bytes);
-  } else if (typeof bytes === "string") {
-    hash.update(bytes);
-  } else {
-    // Unexpected source shape (e.g. an s3Location instead of inline bytes): hash a
-    // JSON projection so the placeholder is still deterministic per image.
-    try {
-      hash.update(JSON.stringify(source ?? image));
-    } catch {
-      hash.update("unknown");
-    }
+    return imageContentHash8(bytes);
   }
-  return hash.digest("hex").slice(0, 8);
+  if (typeof bytes === "string") {
+    return imageContentHash8(Buffer.from(bytes));
+  }
+  // Unexpected source shape (e.g. an s3Location instead of inline bytes): hash a
+  // JSON projection so the placeholder is still deterministic per image.
+  let json: string;
+  try {
+    json = JSON.stringify(source ?? image);
+  } catch {
+    json = "unknown";
+  }
+  return imageContentHash8(Buffer.from(json));
 }
 
 function historyImagePlaceholderBlock(imageBlock: Record<string, unknown>): { text: string } {
   const image = imageBlock.image as Record<string, unknown>;
-  return { text: `[photo ${hashConverseImage(image)}: analyzed meal image]` };
+  return { text: historyImagePlaceholderText(hashConverseImage(image)) };
 }
 
 /**
