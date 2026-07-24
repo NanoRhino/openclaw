@@ -8,6 +8,7 @@ import {
 import {
   applyBedrockLastUserCacheBoundary,
   applyBedrockSystemPromptCacheBoundary,
+  createBedrockHistoryImageProjectionWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
   streamWithPayloadPatch,
@@ -281,13 +282,17 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({ modelId, streamFn }: { modelId: string; streamFn?: StreamFn }) => {
+    // Anthropic-on-Bedrock (regular IDs and opaque app inference profiles) get
+    // history-image projection: non-current-turn photos are re-serialized into
+    // the Converse body every turn otherwise. Vision on the current turn is
+    // preserved; cache-boundary patches compose on top (they run after this).
     if (isAnthropicBedrockModel(modelId)) {
-      return streamFn;
+      return createBedrockHistoryImageProjectionWrapper(streamFn);
     }
     // For app inference profiles with opaque IDs, don't force cacheRetention: "none"
     // yet — we may resolve them as Claude later via GetInferenceProfile.
     if (isBedrockAppInferenceProfile(modelId)) {
-      return streamFn;
+      return createBedrockHistoryImageProjectionWrapper(streamFn);
     }
     return createBedrockNoCacheWrapper(streamFn);
   };

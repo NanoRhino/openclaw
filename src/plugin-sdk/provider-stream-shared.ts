@@ -460,8 +460,10 @@ export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedde
 export {
   applyBedrockLastUserCacheBoundary,
   applyBedrockSystemPromptCacheBoundary,
+  createBedrockHistoryImageProjectionWrapper,
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
+  replaceBedrockHistoryImages,
 } from "../agents/pi-embedded-runner/bedrock-stream-wrappers.js";
 export {
   createMoonshotThinkingWrapper,
