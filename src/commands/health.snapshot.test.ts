@@ -42,6 +42,11 @@ async function loadFreshHealthModulesForTest() {
   }));
   vi.doMock("../config/sessions/store.js", () => ({
     loadSessionStore: () => testStore,
+    readSessionStoreKeyActivity: () =>
+      Object.entries(testStore).map(([key, entry]) => ({
+        key,
+        updatedAt: entry?.updatedAt ?? 0,
+      })),
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
