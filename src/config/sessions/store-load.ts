@@ -4,7 +4,7 @@ import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.sha
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   isSessionStoreCacheEnabled,
-  readSessionStoreCache,
+  peekSessionStoreCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
@@ -73,13 +73,17 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): void
   }
 }
 
-export function loadSessionStore(
+export type SessionStoreKeyActivity = { key: string; updatedAt: number };
+
+function obtainSessionStore(
   storePath: string,
   opts: LoadSessionStoreOptions = {},
 ): Record<string, SessionEntry> {
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     const currentFileStat = getFileStatSnapshot(storePath);
-    const cached = readSessionStoreCache({
+    // Read-only peek: no clone here. loadSessionStore() clones the result below;
+    // readSessionStoreKeyActivity() projects it to primitives without cloning.
+    const cached = peekSessionStoreCache({
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
       sizeBytes: currentFileStat?.sizeBytes,
@@ -158,5 +162,34 @@ export function loadSessionStore(
     });
   }
 
-  return structuredClone(store);
+  return store;
+}
+
+/**
+ * Load the full session store. Returns a deep clone so callers can freely mutate
+ * the result without touching the cache or other readers.
+ */
+export function loadSessionStore(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): Record<string, SessionEntry> {
+  return structuredClone(obtainSessionStore(storePath, opts));
+}
+
+/**
+ * Lightweight projection of the store to [key, updatedAt] pairs WITHOUT cloning
+ * the whole store. Returns a fresh array of primitives (no shared reference to
+ * store entries), so hot callers like the health snapshot can read activity
+ * metadata without forcing a full-store deep clone on a 60s timer.
+ */
+export function readSessionStoreKeyActivity(
+  storePath: string,
+  opts: LoadSessionStoreOptions = {},
+): SessionStoreKeyActivity[] {
+  const store = obtainSessionStore(storePath, opts);
+  const activity: SessionStoreKeyActivity[] = [];
+  for (const key of Object.keys(store)) {
+    activity.push({ key, updatedAt: store[key]?.updatedAt ?? 0 });
+  }
+  return activity;
 }

@@ -116,11 +116,12 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 };
 
 const buildSessionSummary = async (storePath: string) => {
-  const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath);
-  const sessions = Object.entries(store)
-    .filter(([key]) => key !== "global" && key !== "unknown")
-    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
+  // Only key + updatedAt are needed here; use the lightweight projection so the
+  // 60s health snapshot does not deep-clone the entire session store (a full
+  // structuredClone on a hot timer is a GC-pause driver under load).
+  const { readSessionStoreKeyActivity } = await import("../config/sessions/store.js");
+  const sessions = readSessionStoreKeyActivity(storePath)
+    .filter(({ key }) => key !== "global" && key !== "unknown")
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,

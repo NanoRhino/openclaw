@@ -52,7 +52,14 @@ export function dropSessionStoreObjectCache(storePath: string): void {
   SESSION_STORE_CACHE.delete(storePath);
 }
 
-export function readSessionStoreCache(params: {
+/**
+ * Read-only, non-cloning view of the cached store. The returned object is the
+ * shared cache instance — callers MUST treat it as read-only and never mutate or
+ * hand it out. Used by lightweight projections (e.g. key/updatedAt summaries)
+ * that would otherwise force a full `structuredClone` of the whole store on a
+ * hot timer. Applies the mtime/size staleness check (invalidating on drift).
+ */
+export function peekSessionStoreCache(params: {
   storePath: string;
   mtimeMs?: number;
   sizeBytes?: number;
@@ -65,7 +72,16 @@ export function readSessionStoreCache(params: {
     invalidateSessionStoreCache(params.storePath);
     return null;
   }
-  return structuredClone(cached.store);
+  return cached.store;
+}
+
+export function readSessionStoreCache(params: {
+  storePath: string;
+  mtimeMs?: number;
+  sizeBytes?: number;
+}): Record<string, SessionEntry> | null {
+  const cached = peekSessionStoreCache(params);
+  return cached ? structuredClone(cached) : null;
 }
 
 export function writeSessionStoreCache(params: {
