@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { hydrateSkillSnapshots } from "./skills-snapshot-dedup.js";
 import {
   isSessionStoreCacheEnabled,
   peekSessionStoreCache,
@@ -129,6 +130,11 @@ function obtainSessionStore(
   } else {
     setSerializedSessionStore(storePath, undefined);
   }
+
+  // Resolve deduplicated skillsSnapshot refs to shared full snapshots before any
+  // load-time maintenance, so a ref always resolves against the complete file
+  // and every downstream reader sees a fully hydrated entry.
+  hydrateSkillSnapshots(store);
 
   applySessionStoreMigrations(store);
   normalizeSessionStore(store);
