@@ -22,6 +22,8 @@ import {
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   sessionPathForFile,
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -818,6 +820,21 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    // Classify dreaming/cron transcripts ONCE per sync (a single session-store
+    // read) and thread the result into buildSessionEntry. Without opts, each
+    // buildSessionEntry re-derives this classification and re-reads+clones the
+    // whole session store TWICE per file -> O(files x store) on every full index
+    // (the 09:00 batch stall). Mirrors the dreaming-phase path; result is
+    // byte-identical (normalizeSessionTranscriptPathForComparison === the
+    // internal normalizer buildSessionEntry uses).
+    const transcriptClassification =
+      files.length > 0
+        ? loadSessionTranscriptClassificationForAgent(this.agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
+
     const tasks = files.map((absPath) => async () => {
       if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
         if (params.progress) {
@@ -829,7 +846,12 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      const entry = await buildSessionEntry(absPath);
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absPath);
+      const entry = await buildSessionEntry(absPath, {
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+      });
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;
