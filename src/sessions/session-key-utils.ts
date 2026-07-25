@@ -63,6 +63,40 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
+/**
+ * Extract the cron jobId from a *base* cron session key
+ * (`agent:<agentId>:cron:<jobId>`), or null when the key is not a base cron
+ * session key.
+ *
+ * Only the exact base entry matches: run-record keys
+ * (`...:cron:<jobId>:run:<uuid>`) and any deeper cron-derived keys
+ * (thread/subagent children) return null, so callers prune only the base entry
+ * and never a run record or child session by accident.
+ *
+ * The jobId is returned with its original case preserved so it can be compared
+ * against live `CronJob.id` values.
+ */
+export function parseCronBaseJobId(sessionKey: string | undefined | null): string | null {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  // `agent:<agentId>:cron:<jobId>` → exactly 4 non-empty segments. agentId and
+  // jobId are colon-free (agentId is a 6-digit id; jobId is a UUID), matching
+  // the single-segment assumptions in parseAgentSessionKey.
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length !== 4) {
+    return null;
+  }
+  if (normalizeOptionalLowercaseString(parts[0]) !== "agent") {
+    return null;
+  }
+  if (normalizeOptionalLowercaseString(parts[2]) !== "cron") {
+    return null;
+  }
+  return normalizeOptionalString(parts[3]) ?? null;
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {

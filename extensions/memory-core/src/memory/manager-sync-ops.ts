@@ -22,6 +22,8 @@ import {
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   sessionPathForFile,
   type SessionFileEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -57,7 +59,10 @@ import {
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  resolveMemorySessionSyncPlan,
+  shouldParseSessionFileForStatSkip,
+} from "./manager-session-sync-state.js";
 import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
@@ -800,7 +805,7 @@ export abstract class MemoryManagerSyncOps {
           }).rows,
       sessionPathForFile,
     });
-    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
+    const { activePaths, existingRows, existingHashes, existingStats, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -818,18 +823,65 @@ export abstract class MemoryManagerSyncOps {
       });
     }
 
+    // Classify dreaming/cron transcripts ONCE per sync (a single session-store
+    // read) and thread the result into buildSessionEntry. Without opts, each
+    // buildSessionEntry re-derives this classification and re-reads+clones the
+    // whole session store TWICE per file -> O(files x store) on every full index
+    // (the 09:00 batch stall). Mirrors the dreaming-phase path; result is
+    // byte-identical (normalizeSessionTranscriptPathForComparison === the
+    // internal normalizer buildSessionEntry uses).
+    const transcriptClassification =
+      files.length > 0
+        ? loadSessionTranscriptClassificationForAgent(this.agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
+
+    // Fail-open per-file stat-skip: a routine sync (no dirty files) used to
+    // re-parse EVERY transcript (forced indexAll); now only files whose mtime/
+    // size differ from the last index (or are unknown/unreadable) are re-parsed.
+    // Kill switch OPENCLAW_MEMORY_STAT_SKIP=off restores the old forced-indexAll.
+    const statSkipEnabled =
+      process.env.OPENCLAW_MEMORY_STAT_SKIP !== "off" &&
+      process.env.OPENCLAW_MEMORY_STAT_SKIP !== "0";
+    const forceFullReparse = params.needsFullReindex || Boolean(targetSessionFiles);
+    const reportSkipped = () => {
+      if (params.progress) {
+        params.progress.completed += 1;
+        params.progress.report({
+          completed: params.progress.completed,
+          total: params.progress.total,
+        });
+      }
+    };
+
     const tasks = files.map((absPath) => async () => {
-      if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
-        if (params.progress) {
-          params.progress.completed += 1;
-          params.progress.report({
-            completed: params.progress.completed,
-            total: params.progress.total,
-          });
+      if (statSkipEnabled) {
+        const currentStat = await fs
+          .stat(absPath)
+          .then((s) => ({ mtimeMs: s.mtimeMs, size: s.size }))
+          .catch(() => null);
+        const shouldParse = shouldParseSessionFileForStatSkip({
+          forceFullReparse,
+          isDirty: this.sessionsDirtyFiles.has(absPath),
+          currentStat,
+          knownStat: existingStats?.get(sessionPathForFile(absPath)),
+        });
+        if (!shouldParse) {
+          reportSkipped();
+          return;
         }
+      } else if (!indexAll && !this.sessionsDirtyFiles.has(absPath)) {
+        reportSkipped();
         return;
       }
-      const entry = await buildSessionEntry(absPath);
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(absPath);
+      const entry = await buildSessionEntry(absPath, {
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+      });
       if (!entry) {
         if (params.progress) {
           params.progress.completed += 1;

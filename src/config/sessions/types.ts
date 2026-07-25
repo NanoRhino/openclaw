@@ -259,6 +259,16 @@ export type SessionEntry = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
+  /**
+   * Serialization-only pointer to the sessionKey whose entry holds the inline
+   * `skillsSnapshot` this entry shares (see skills-snapshot-dedup.ts). Present
+   * only on disk / in the serialized cache: `hydrateSkillSnapshots` resolves it
+   * back to a shared `skillsSnapshot` and strips it, so the live in-memory store
+   * never carries a ref. Never read as authority — a reader seeing it (e.g.
+   * older code after a rollback) simply finds `skillsSnapshot` undefined and
+   * rebuilds.
+   */
+  skillsSnapshotRef?: string;
   systemPromptReport?: SessionSystemPromptReport;
   /**
    * Generic plugin-owned runtime debug entries shown in verbose status surfaces.

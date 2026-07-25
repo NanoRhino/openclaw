@@ -17,6 +17,7 @@ import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { dehydrateSkillSnapshotsForSerialize } from "./skills-snapshot-dedup.js";
 import {
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
@@ -359,7 +360,9 @@ async function saveSessionStoreUnlocked(
   }
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  const json = JSON.stringify(store, null, 2);
+  // Deduplicate identical skillsSnapshot copies to one inline holder + refs
+  // before serializing. Non-mutating: the live store stays fully hydrated.
+  const json = JSON.stringify(dehydrateSkillSnapshotsForSerialize(store), null, 2);
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
     return;

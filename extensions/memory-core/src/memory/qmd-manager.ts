@@ -23,6 +23,8 @@ import {
   deriveQmdScopeChatType,
   isQmdScopeAllowed,
   listSessionFilesForAgent,
+  loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseQmdQueryJson,
   resolveCliSpawnInvocation,
   runCliCommand,
@@ -2152,8 +2154,23 @@ export class QmdMemoryManager implements MemorySearchManager {
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
+    // Classify once per export (single session-store read) and thread into
+    // buildSessionEntry; without opts each call re-reads+clones the whole store
+    // twice per file. Byte-identical to the internal derivation.
+    const transcriptClassification =
+      files.length > 0
+        ? loadSessionTranscriptClassificationForAgent(this.agentId)
+        : {
+            dreamingNarrativeTranscriptPaths: new Set<string>(),
+            cronRunTranscriptPaths: new Set<string>(),
+          };
     for (const sessionFile of files) {
-      const entry = await buildSessionEntry(sessionFile);
+      const normalizedPath = normalizeSessionTranscriptPathForComparison(sessionFile);
+      const entry = await buildSessionEntry(sessionFile, {
+        generatedByDreamingNarrative:
+          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
+        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
+      });
       if (!entry) {
         continue;
       }
