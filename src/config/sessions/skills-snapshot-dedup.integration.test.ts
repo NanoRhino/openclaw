@@ -28,6 +28,7 @@ describe("skillsSnapshot dedup — save/load integration", () => {
 
   afterEach(() => {
     clearSessionStoreCaches();
+    delete process.env.OPENCLAW_SKILLS_SNAPSHOT_DEDUP;
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -56,6 +57,27 @@ describe("skillsSnapshot dedup — save/load integration", () => {
     }
     expect(loaded["agent:m:main"].skillsSnapshot).toBe(loaded["agent:m:cron:a"].skillsSnapshot);
     expect(loaded["agent:m:cron:a"].skillsSnapshot).toBe(loaded["agent:m:cron:b"].skillsSnapshot);
+  });
+
+  it("kill switch off = byte-identical old behavior (full inline on disk, distinct in memory)", async () => {
+    process.env.OPENCLAW_SKILLS_SNAPSHOT_DEDUP = "off";
+    const store: Record<string, SessionEntry> = {
+      "agent:m:main": { sessionId: "s0", updatedAt: 10, skillsSnapshot: makeSnapshot("v3") },
+      "agent:m:cron:a": { sessionId: "s1", updatedAt: 11, skillsSnapshot: makeSnapshot("v3") },
+      "agent:m:cron:b": { sessionId: "s2", updatedAt: 12, skillsSnapshot: makeSnapshot("v3") },
+    };
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+
+    // On disk: full inline everywhere (no refs) — byte-identical to the pre-dedup
+    // serializer output for the same store.
+    const raw = fs.readFileSync(storePath, "utf-8");
+    expect(raw).toBe(JSON.stringify(store, null, 2));
+
+    // In memory: no sharing (old behavior — each entry its own object).
+    clearSessionStoreCaches();
+    const loaded = loadSessionStore(storePath, { skipCache: true });
+    expect(loaded["agent:m:main"].skillsSnapshot).not.toBe(loaded["agent:m:cron:a"].skillsSnapshot);
+    expect(Object.values(loaded).every((e) => e.skillsSnapshotRef === undefined)).toBe(true);
   });
 
   it("shrinks the on-disk file versus full inline copies", async () => {
