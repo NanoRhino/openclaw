@@ -858,11 +858,18 @@ export async function onTimer(state: CronServiceState) {
 
     if (storePaths.size > 0) {
       const nowMs = state.deps.nowMs();
+      // Authoritative live jobId set for registry-based base cron pruning. Only
+      // built when the cron store is loaded (state.store present); otherwise the
+      // reaper skips base pruning rather than risk dropping live sessions.
+      // Includes disabled jobs — a disabled job still exists (getJob returns it)
+      // so its base cron session must be kept.
+      const liveJobIds = state.store ? new Set(state.store.jobs.map((job) => job.id)) : undefined;
       for (const storePath of storePaths) {
         try {
           await sweepCronRunSessions({
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
+            liveJobIds,
             nowMs,
             log: state.deps.log,
           });

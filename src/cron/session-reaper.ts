@@ -11,8 +11,9 @@ import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseCronBaseJobId } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
+import { selectStaleBaseCronKeys } from "./stale-base-cron.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 
@@ -41,10 +42,25 @@ export type ReaperResult = {
   pruned: number;
 };
 
+/** Kill switch: OPENCLAW_CRON_BASE_SESSION_REAP=off (or 0) disables base cron pruning. */
+function isBaseCronReapEnabled(): boolean {
+  const raw = process.env.OPENCLAW_CRON_BASE_SESSION_REAP;
+  return raw !== "off" && raw !== "0";
+}
+
 /**
- * Sweep the session store and prune expired cron run sessions.
+ * Sweep the session store and prune expired cron sessions.
  * Designed to be called from the cron timer tick — self-throttles via
  * MIN_SWEEP_INTERVAL_MS to avoid excessive I/O.
+ *
+ * Two independent prunes share one lock + one save:
+ *  - Run records (`...:cron:<jobId>:run:<uuid>`): pruned by time (retentionMs).
+ *  - Base entries (`...:cron:<jobId>`): pruned by cron registry — an entry is
+ *    removed only when its jobId is absent from `liveJobIds`. Base pruning runs
+ *    only when the caller passes `liveJobIds` (the authoritative live set); it
+ *    is never time-based, and it is independent of `sessionRetention` (which
+ *    only governs the time-based run pruning) so orphaned base entries are
+ *    cleaned even when run retention is disabled.
  *
  * Lock ordering: this function acquires the session-store file lock via
  * `updateSessionStore`. It must be called OUTSIDE of the cron service's
@@ -55,6 +71,13 @@ export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
   /** Resolved path to sessions.json — required. */
   sessionStorePath: string;
+  /**
+   * Authoritative set of live cron jobIds. When provided, base cron entries
+   * whose jobId is absent are pruned. Omit to skip base pruning entirely — the
+   * caller must be certain this is the full, loaded set, or live sessions would
+   * be dropped.
+   */
+  liveJobIds?: ReadonlySet<string>;
   nowMs?: number;
   log: Logger;
   /** Override for testing — skips the min-interval throttle. */
@@ -70,7 +93,8 @@ export async function sweepCronRunSessions(params: {
   }
 
   const retentionMs = resolveRetentionMs(params.cronConfig);
-  if (retentionMs === null) {
+  const baseReapEnabled = params.liveJobIds !== undefined && isBaseCronReapEnabled();
+  if (retentionMs === null && !baseReapEnabled) {
     lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
@@ -79,17 +103,36 @@ export async function sweepCronRunSessions(params: {
   const prunedSessions = new Map<string, string | undefined>();
   try {
     await updateSessionStore(storePath, (store) => {
-      const cutoff = now - retentionMs;
-      for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
-          continue;
+      if (retentionMs !== null) {
+        const cutoff = now - retentionMs;
+        for (const key of Object.keys(store)) {
+          if (!isCronRunSessionKey(key)) {
+            continue;
+          }
+          const entry = store[key];
+          if (!entry) {
+            continue;
+          }
+          const updatedAt = entry.updatedAt ?? 0;
+          if (updatedAt < cutoff) {
+            if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
+              prunedSessions.set(entry.sessionId, entry.sessionFile);
+            }
+            delete store[key];
+            pruned++;
+          }
         }
-        const entry = store[key];
-        if (!entry) {
-          continue;
-        }
-        const updatedAt = entry.updatedAt ?? 0;
-        if (updatedAt < cutoff) {
+      }
+      if (baseReapEnabled && params.liveJobIds) {
+        for (const key of selectStaleBaseCronKeys({ store, liveJobIds: params.liveJobIds })) {
+          const entry = store[key];
+          if (!entry) {
+            continue;
+          }
+          params.log.info(
+            { key, jobId: parseCronBaseJobId(key), sessionFile: entry.sessionFile },
+            "cron-reaper: pruning orphaned base cron session (jobId no longer registered)",
+          );
           if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
             prunedSessions.set(entry.sessionId, entry.sessionFile);
           }
@@ -123,7 +166,9 @@ export async function sweepCronRunSessions(params: {
       if (archivedDirs.size > 0) {
         await cleanupArchivedSessionTranscripts({
           directories: [...archivedDirs],
-          olderThanMs: retentionMs,
+          // Base-only sweeps run with run-retention disabled (retentionMs null);
+          // fall back to the default retention for archive cleanup age.
+          olderThanMs: retentionMs ?? DEFAULT_RETENTION_MS,
           reason: "deleted",
           nowMs: now,
         });
@@ -134,10 +179,7 @@ export async function sweepCronRunSessions(params: {
   }
 
   if (pruned > 0) {
-    params.log.info(
-      { pruned, retentionMs },
-      `cron-reaper: pruned ${pruned} expired cron run session(s)`,
-    );
+    params.log.info({ pruned, retentionMs }, `cron-reaper: pruned ${pruned} cron session(s)`);
   }
 
   return { swept: true, pruned };

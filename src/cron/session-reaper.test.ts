@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
@@ -254,5 +254,160 @@ describe("sweepCronRunSessions", () => {
       log,
     });
     expect(r3.swept).toBe(false);
+  });
+});
+
+describe("sweepCronRunSessions — base cron pruning (registry-based)", () => {
+  let tmpDir: string;
+  let storePath: string;
+  const log = createTestLogger();
+
+  beforeEach(() => {
+    resetReaperThrottle();
+    delete process.env.OPENCLAW_CRON_BASE_SESSION_REAP;
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-base-"));
+    storePath = path.join(tmpDir, "sessions.json");
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_CRON_BASE_SESSION_REAP;
+  });
+
+  it("prunes base cron entries whose jobId is no longer live, keeps live ones", async () => {
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:live-1": { sessionId: "s-live", updatedAt: now },
+      "agent:main:cron:dead-1": { sessionId: "s-dead", updatedAt: now },
+      "agent:main:telegram:dm:123": { sessionId: "s-reg", updatedAt: now },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      liveJobIds: new Set(["live-1"]),
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(1);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:live-1"]).toBeDefined();
+    expect(updated["agent:main:cron:dead-1"]).toBeUndefined();
+    expect(updated["agent:main:telegram:dm:123"]).toBeDefined();
+  });
+
+  it("does not touch base entries when liveJobIds is omitted (authoritative-set guard)", async () => {
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:dead-1": { sessionId: "s-dead", updatedAt: now },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    // No run records to prune and no liveJobIds → nothing removed.
+    expect(result.pruned).toBe(0);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:dead-1"]).toBeDefined();
+  });
+
+  it("prunes orphaned base entries even when run retention is disabled", async () => {
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:dead-1": { sessionId: "s-dead", updatedAt: now },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false },
+      sessionStorePath: storePath,
+      liveJobIds: new Set(),
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(1);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:dead-1"]).toBeUndefined();
+  });
+
+  it("kill switch OPENCLAW_CRON_BASE_SESSION_REAP=off disables base pruning", async () => {
+    process.env.OPENCLAW_CRON_BASE_SESSION_REAP = "off";
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:dead-1": { sessionId: "s-dead", updatedAt: now },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: false },
+      sessionStorePath: storePath,
+      liveJobIds: new Set(),
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(false);
+    expect(result.pruned).toBe(0);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:dead-1"]).toBeDefined();
+  });
+
+  it("prunes run records and orphaned base entries in a single sweep", async () => {
+    const now = Date.now();
+    const store = {
+      "agent:main:cron:dead-1": { sessionId: "s-dead", updatedAt: now },
+      "agent:main:cron:live-1": { sessionId: "s-live", updatedAt: now },
+      "agent:main:cron:live-1:run:old": { sessionId: "s-run", updatedAt: now - 25 * 3_600_000 },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      liveJobIds: new Set(["live-1"]),
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(2);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:dead-1"]).toBeUndefined();
+    expect(updated["agent:main:cron:live-1"]).toBeDefined();
+    expect(updated["agent:main:cron:live-1:run:old"]).toBeUndefined();
+  });
+
+  it("archives the transcript of a pruned orphaned base session", async () => {
+    const now = Date.now();
+    const baseSessionId = "s-dead";
+    const transcript = path.join(tmpDir, `${baseSessionId}.jsonl`);
+    fs.writeFileSync(transcript, '{"type":"session"}\n');
+    const store = {
+      "agent:main:cron:dead-1": { sessionId: baseSessionId, updatedAt: now },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      liveJobIds: new Set(),
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(fs.existsSync(transcript)).toBe(false);
+    const files = fs.readdirSync(tmpDir);
+    expect(files.some((name) => name.startsWith(`${baseSessionId}.jsonl.deleted.`))).toBe(true);
   });
 });
