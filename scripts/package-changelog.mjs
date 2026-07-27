@@ -13,9 +13,9 @@ const MAX_PACKAGED_CHANGELOG_BYTES = 500 * 1024;
 const MIN_RELEASE_SECTION_BODY_BYTES = 32;
 const UNRELEASED_HEADING = "Unreleased";
 const RELEASE_HEADING_PATTERN =
-  /^##\s+([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:(?:-(?:alpha|beta)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?)(?:\s+.*)?$/u;
+  /^##\s+([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:(?:-(?:alpha|beta|nanorhino)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?)(?:\s+.*)?$/u;
 const RELEASE_VERSION_PATTERN =
-  /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)(?:(?:-(?:alpha|beta)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?$/u;
+  /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)(?:(?:-(?:alpha|beta|nanorhino)\.[1-9][0-9]*)|(?:-[1-9][0-9]*))?$/u;
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 

@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.7.1-nanorhino.1
+
+### Fixes
+
+- **final-tag gate (NanoRhino fork):** port the full `enforceFinalTag` config surface from the 4.24 line — `agents.defaults`/`agents.list[].enforceFinalTag`, gate-coupled `<final>` system-prompt hint, over-suppression canary log, bare-NO_REPLY silent-sentinel restore, and embedded-runner boundary resolution so cron turns are gated exactly like inbound turns. Closes the path that delivered mid-turn reasoning as a real outbound message.
+
 ## 2026.7.1-2
 
 ### Fixes
