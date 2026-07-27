@@ -90,10 +90,7 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "cron",
-      config: {
-        ...overflowBaseRunParams.config,
-        agents: { defaults: { enforceFinalTag: true } },
-      },
+      config: { agents: { defaults: { enforceFinalTag: true } } },
     });
 
     const [attemptParams] = (mockedRunEmbeddedAttempt.mock.calls.at(0) ?? []) as [
@@ -108,10 +105,7 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
       trigger: "cron",
-      config: {
-        ...overflowBaseRunParams.config,
-        agents: { defaults: { enforceFinalTag: true } },
-      },
+      config: { agents: { defaults: { enforceFinalTag: true } } },
       enforceFinalTag: false,
     });
 

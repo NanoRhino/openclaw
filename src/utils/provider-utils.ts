@@ -100,6 +100,7 @@ export function resolveReasoningTagHint(
     modelId?: string;
     modelApi?: string | null;
     model?: ProviderRuntimeModel;
+    runtimeHandle?: ProviderRuntimePluginHandle;
   },
 ): boolean {
   if (enforceFinalTag !== undefined) {
