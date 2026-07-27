@@ -1098,12 +1098,13 @@ export function handleMessageEnd(
         ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
         ctx.builtinToolNames?.has("message") === true,
     }) ?? rawVisibleText;
-  const strippedVisibleText = ctx.stripBlockTags(
-    visibleText,
-    { thinking: false, final: false },
-    { final: true },
-  );
-  const finalVisibleText = ctx.params.enforceFinalTag ? strippedVisibleText : visibleText;
+  // Strip ONLY when the gate is on: a gate-off turn must not touch literal
+  // reasoning-looking tags in the visible text (pinned by the handlers test).
+  // When the gate is on, finalVisibleText is exactly the stripped text, so the
+  // sentinel/canary checks below (all gate-on-only) read it directly.
+  const finalVisibleText = ctx.params.enforceFinalTag
+    ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
+    : visibleText;
   // enforceFinalTag strips every character the model emitted outside a <final>
   // block. When the model's entire reply is a bare silent sentinel (NO_REPLY
   // emitted without wrapping it in <final>, e.g. after a "👍"), that strip
@@ -1117,7 +1118,7 @@ export function handleMessageEnd(
   // incomplete-turn error, which stays useful for real failures.
   const discardedSilentSentinel =
     ctx.params.enforceFinalTag === true &&
-    strippedVisibleText.trim().length === 0 &&
+    finalVisibleText.trim().length === 0 &&
     isSilentReplyPayloadText(rawVisibleText, SILENT_REPLY_TOKEN);
   // Canary: the enforceFinalTag gate discarded the entire visible reply because
   // the model never opened a <final> tag. Warn (without the content, which may
@@ -1127,7 +1128,7 @@ export function handleMessageEnd(
     ctx.params.enforceFinalTag &&
     !discardedSilentSentinel &&
     visibleText.trim().length > 0 &&
-    strippedVisibleText.trim().length === 0
+    finalVisibleText.trim().length === 0
   ) {
     ctx.log.warn(
       `[final-tag] discarded reply with no <final> tag ` +
