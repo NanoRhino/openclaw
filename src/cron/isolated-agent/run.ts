@@ -475,14 +475,21 @@ function appendCronDeliveryInstruction(params: {
   if (!params.deliveryRequested) {
     return params.commandBody;
   }
+  // The <final> requirement is stated here — inside the task prompt, where a
+  // small non-thinking model actually looks — and not only in the system
+  // prompt. Isolated cron sessions start cold (no prior turns showing the tag
+  // convention), and a reply the enforceFinalTag gate can't attribute to a
+  // <final> block is discarded whole: that ate the 2026-07-29 make-up
+  // reminders (3/3 non-compliance on prompt-only hinting). Harmless when the
+  // gate is off — tag markers are stripped from visible output regardless.
   if (params.messageToolEnabled) {
     const targetHint =
       params.requireExplicitMessageTarget || !params.resolvedDeliveryOk
         ? "with an explicit target"
         : "for the current chat";
-    return `${params.commandBody}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically.`.trim();
+    return `${params.commandBody}\n\nUse the message tool if you need to notify the user directly ${targetHint}. If you do not send directly, your final plain-text reply will be delivered automatically. Wrap that final reply in <final></final> tags — only text inside <final> is delivered.`.trim();
   }
-  return `${params.commandBody}\n\nReturn your response as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+  return `${params.commandBody}\n\nReturn your response as plain text wrapped in <final></final> tags — only text inside <final> is delivered; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
 }
 
 function resolvePositiveContextTokens(value: unknown): number | undefined {
