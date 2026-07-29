@@ -983,6 +983,39 @@ export async function runEmbeddedPiAgent(
             model: modelId,
             assistant: currentAttemptAssistant ?? sessionLastAssistant,
           });
+          // P0 delivery boundary (2026-07-29 incident): harness/provider error
+          // strings ("⚠️ Agent couldn't generate a response…", overflow/timeout
+          // notices) must never reach member-facing sessions — one escaped the
+          // reply filter (isError payloads bypass it) and landed as real SMS.
+          // enforceFinalTag is the existing member/operator line (config
+          // defaults true for member agents, operator agents override false),
+          // so suppression couples to the same resolution the gate uses.
+          // Operators keep full error visibility; member sessions end silent
+          // with the error preserved in logs.
+          const suppressErrorPayloadsForMemberSession = resolveEmbeddedEnforceFinalTag({
+            explicit: params.enforceFinalTag,
+            config: params.config,
+            agentId: workspaceResolution.agentId,
+            provider,
+            workspaceDir: resolvedWorkspace,
+            modelId,
+            model: effectiveModel,
+          });
+          const withUserFacingErrorPolicy = <T extends { isError?: boolean }>(
+            payloads: T[],
+          ): T[] => {
+            if (!suppressErrorPayloadsForMemberSession) {
+              return payloads;
+            }
+            const kept = payloads.filter((payload) => !payload.isError);
+            if (kept.length !== payloads.length) {
+              log.warn(
+                `[error-suppress] withheld ${payloads.length - kept.length} error payload(s) ` +
+                  `from member-facing session runId=${params.runId} (enforceFinalTag on)`,
+              );
+            }
+            return kept;
+          };
           const resolveReplayInvalidForAttempt = (incompleteTurnText?: string | null) =>
             accumulatedReplayState.replayInvalid ||
             resolveReplayInvalidFlag({
@@ -1367,14 +1400,14 @@ export async function runEmbeddedPiAgent(
               livenessState: "blocked",
             });
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text:
                     "Context overflow: prompt too large for the model. " +
                     "Try /reset (or /new) to start a fresh session, or use a larger-context model.",
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
@@ -1423,14 +1456,14 @@ export async function runEmbeddedPiAgent(
                 livenessState: "blocked",
               });
               return {
-                payloads: [
+                payloads: withUserFacingErrorPolicy([
                   {
                     text:
                       "Message ordering conflict - please try again. " +
                       "If this persists, use /new to start a fresh session.",
                     isError: true,
                   },
-                ],
+                ]),
                 meta: {
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
@@ -1463,14 +1496,14 @@ export async function runEmbeddedPiAgent(
                 livenessState: "blocked",
               });
               return {
-                payloads: [
+                payloads: withUserFacingErrorPolicy([
                   {
                     text:
                       `Image too large for the model${maxBytesHint}. ` +
                       "Please compress or resize the image and try again.",
                     isError: true,
                   },
-                ],
+                ]),
                 meta: {
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
@@ -1849,12 +1882,12 @@ export async function runEmbeddedPiAgent(
               livenessState,
             });
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: timeoutText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -2011,12 +2044,12 @@ export async function runEmbeddedPiAgent(
               livenessState,
             });
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: STRICT_AGENTIC_BLOCKED_TEXT,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -2060,12 +2093,12 @@ export async function runEmbeddedPiAgent(
               });
             }
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: "⚠️ Agent couldn't generate a response. Please try again.",
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -2171,12 +2204,12 @@ export async function runEmbeddedPiAgent(
             }
 
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: incompleteTurnText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
