@@ -643,30 +643,28 @@ export function handleMessageEnd(
 
   const strippedVisibleText = ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false });
   // enforceFinalTag strips every character the model emitted outside a <final>
-  // block. When the model's entire reply is a bare silent sentinel (NO_REPLY
-  // emitted without wrapping it in <final>, e.g. after a "👍"), that strip
-  // collapses an intentional silence into a zero-payload turn, which the
-  // incomplete-turn guard then surfaces to the user as
-  // "⚠️ Agent couldn't generate a response." Recognize the discarded sentinel
-  // and restore it so the turn flows through the normal silent-reply path
-  // (finalizeAssistantTexts -> hasOnlySilentAssistantReply exemption; the
-  // NO_REPLY payload is suppressed downstream by createOutboundPayloadPlan).
-  // Genuine empty or garbled output carries no sentinel and still surfaces the
-  // incomplete-turn error, which stays useful for real failures.
-  const discardedSilentSentinel =
+  // block. When that strip discards the ENTIRE reply, the turn must end as
+  // intentional silence, never as a user-visible error: with zero payloads the
+  // incomplete-turn guard would deliver the raw
+  // "⚠️ Agent couldn't generate a response." harness string to the member
+  // (three real SMS on 2026-07-28/29, breakfast-nudge runs whose short untagged
+  // replies the gate ate whole). Route every total discard through the
+  // silent-reply path (finalizeAssistantTexts -> hasOnlySilentAssistantReply
+  // exemption; the NO_REPLY payload is suppressed downstream by
+  // createOutboundPayloadPlan). A genuinely empty reply (model produced no
+  // visible text at all) still surfaces the incomplete-turn error — that signal
+  // stays for real failures.
+  const discardedEntireReply =
     ctx.params.enforceFinalTag === true &&
     strippedVisibleText.trim().length === 0 &&
-    isSilentReplyPayloadText(rawVisibleText, SILENT_REPLY_TOKEN);
-  // Canary: the enforceFinalTag gate discarded the entire visible reply because
-  // the model never opened a <final> tag. Warn (without the content, which may
-  // contain user data) so rollout can watch for over-suppression. A discarded
+    rawVisibleText.trim().length > 0;
+  const discardedSilentSentinel =
+    discardedEntireReply && isSilentReplyPayloadText(rawVisibleText, SILENT_REPLY_TOKEN);
+  // Canary: the enforceFinalTag gate discarded real content because the model
+  // never opened a <final> tag. Warn (without the content, which may contain
+  // user data) so rollout can watch the over-suppression rate. A discarded
   // silent sentinel is intentional silence, not lost content, so skip the warn.
-  if (
-    ctx.params.enforceFinalTag &&
-    !discardedSilentSentinel &&
-    rawVisibleText.trim().length > 0 &&
-    strippedVisibleText.trim().length === 0
-  ) {
+  if (discardedEntireReply && !discardedSilentSentinel) {
     ctx.log.warn(
       `[final-tag] discarded reply with no <final> tag ` +
         `agentId=${ctx.params.agentId ?? "unknown"} ` +
@@ -675,7 +673,7 @@ export function handleMessageEnd(
     );
   }
   const text = resolveSilentReplyFallbackText({
-    text: discardedSilentSentinel ? SILENT_REPLY_TOKEN : strippedVisibleText,
+    text: discardedEntireReply ? SILENT_REPLY_TOKEN : strippedVisibleText,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =

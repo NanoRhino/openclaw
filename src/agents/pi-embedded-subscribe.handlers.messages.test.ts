@@ -821,7 +821,7 @@ describe("handleMessageEnd", () => {
     expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
-  it("does not restore non-sentinel content discarded by the final-tag gate", () => {
+  it("turns non-sentinel content discarded by the final-tag gate into silence, never an error", () => {
     const finalizeAssistantTexts = vi.fn();
     const ctx = createMessageEndContext({ finalizeAssistantTexts });
     Object.assign(ctx.params, {
@@ -829,8 +829,12 @@ describe("handleMessageEnd", () => {
       agentId: "nutritionist-1",
       sessionKey: "agent:nutritionist-1:main",
     });
-    // Real "thinking out loud" the model forgot to wrap in <final>: this is lost
-    // content, not intentional silence, so it must NOT be treated as a sentinel.
+    // Real content the model forgot to wrap in <final>: the gate eats it whole.
+    // Ending the turn with empty assistantTexts would let the incomplete-turn
+    // guard deliver the raw "⚠️ Agent couldn't generate a response." harness
+    // string to the member (three real SMS, 2026-07-28/29 breakfast nudges).
+    // The contract is silence + canary: restore the silent sentinel so the turn
+    // flows the intentional-silence path, and keep the warn for rate watching.
     (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
 
     void handleMessageEnd(ctx, {
@@ -842,10 +846,10 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    // No sentinel restored (empty text keeps assistantTexts empty -> the
-    // incomplete-turn guard still surfaces its error for genuinely lost output).
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
-    // And the over-suppression canary still fires for real discarded content.
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "NO_REPLY" }),
+    );
+    // The over-suppression canary still fires for real discarded content.
     const warn = ctx.log.warn as unknown as ReturnType<typeof vi.fn>;
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain("[final-tag]");
