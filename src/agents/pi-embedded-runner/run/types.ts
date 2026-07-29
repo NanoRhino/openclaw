@@ -85,6 +85,10 @@ export type EmbeddedRunAttemptResult = {
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
+  /** The enforceFinalTag gate discarded an ENTIRE non-sentinel reply during
+   * this attempt — real content was lost, not intentional silence. Feeds the
+   * runner's one-shot wrap-in-<final> retry (2026-07-29 silent-drop incident). */
+  finalTagDiscardedEntireReply?: boolean;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

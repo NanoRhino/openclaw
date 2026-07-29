@@ -117,6 +117,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolveFinalTagDiscardRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -602,6 +603,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let finalTagDiscardRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -1937,6 +1939,22 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
+          const nextFinalTagDiscardRetryInstruction = resolveFinalTagDiscardRetryInstruction({
+            aborted,
+            timedOut,
+            attempt,
+          });
+          if (nextFinalTagDiscardRetryInstruction && finalTagDiscardRetryAttempts < 1) {
+            finalTagDiscardRetryAttempts += 1;
+            // Reuse the reasoning-only injection channel: the instruction rides
+            // the same next-attempt prompt slot; only the steer text differs.
+            reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryInstruction;
+            log.warn(
+              `[final-tag] entire reply discarded with nothing delivered: runId=${params.runId} ` +
+                `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer`,
+            );
+            continue;
+          }
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts

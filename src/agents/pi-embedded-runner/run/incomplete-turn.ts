@@ -23,6 +23,7 @@ type ReplayMetadataAttempt = Pick<
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "finalTagDiscardedEntireReply"
   | "clientToolCall"
   | "currentAttemptAssistant"
   | "yieldDetected"
@@ -341,6 +342,52 @@ function shouldSkipPlanningOnlyRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     params.attempt.replayMetadata.hadPotentialSideEffects,
+  );
+}
+
+/**
+ * One-shot recovery for a turn whose ENTIRE reply the enforceFinalTag gate
+ * discarded (model wrote real content but never opened a <final> block, and no
+ * messaging-tool send delivered anything). Without this the member gets pure
+ * silence for a message they just sent (2026-07-29 incident: live meal logs
+ * answered with nothing). Unlike the reasoning-only/empty-response retries this
+ * is NOT provider-gated — the failure is our own gate contract, not a model
+ * harness contract, so every provider that runs under the gate gets the retry.
+ * Side-effect guard mirrors the other resolvers: if the attempt already sent
+ * via the messaging tool or recorded potential side effects, resubmission could
+ * duplicate actions — end silent instead (the .18 floor).
+ */
+export function resolveFinalTagDiscardRetryInstruction(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): string | null {
+  if (params.aborted || params.timedOut) {
+    return null;
+  }
+  if (params.attempt.finalTagDiscardedEntireReply !== true) {
+    return null;
+  }
+  if ((params.attempt.messagingToolSentTexts?.length ?? 0) > 0) {
+    return null;
+  }
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
+  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return null;
+  }
+  // Only when nothing user-visible survived: the restored silent sentinel (or
+  // nothing at all) is the whole visible outcome.
+  const visible = params.attempt.assistantTexts.join("\n\n").trim();
+  if (visible && visible !== SILENT_REPLY_TOKEN) {
+    return null;
+  }
+  return (
+    "Your entire previous reply was discarded because it was not wrapped in " +
+    "<final></final> tags — the user has received NOTHING. Send your reply " +
+    "again now, wrapped in <final></final> tags. Only text inside <final> is " +
+    "delivered to the user."
   );
 }
 

@@ -723,6 +723,11 @@ export function handleMessageEnd(
   // user data) so rollout can watch the over-suppression rate. A discarded
   // silent sentinel is intentional silence, not lost content, so skip the warn.
   if (discardedEntireReply && !discardedSilentSentinel) {
+    // Signal the runner: real content was lost, this is NOT intentional
+    // silence. The runner retries the turn once with a wrap-in-<final>
+    // instruction so the member still gets their answer (2026-07-29 incident:
+    // silent drops on live user messages).
+    ctx.state.finalTagDiscardedEntireReply = true;
     ctx.log.warn(
       `[final-tag] discarded reply with no <final> tag ` +
         `agentId=${ctx.params.agentId ?? "unknown"} ` +

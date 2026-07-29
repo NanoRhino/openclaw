@@ -52,6 +52,10 @@ export type EmbeddedPiSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   reasoningStreamOpen: boolean;
+  /** The enforceFinalTag gate discarded an ENTIRE non-sentinel reply this
+   * attempt. Read by the runner's final-tag discard retry (the turn must not
+   * end as unexplained silence for the member — 2026-07-29 incident). */
+  finalTagDiscardedEntireReply?: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
