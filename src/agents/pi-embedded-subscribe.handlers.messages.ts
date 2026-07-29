@@ -20,6 +20,7 @@ import {
   type AssistantPhase,
 } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -41,6 +42,31 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+
+/**
+ * Joined raw text of the assistant message's text blocks, UNSANITIZED — literal
+ * <think>/<final> markers intact. The enforcement-provenance recovery in
+ * handleMessageEnd needs the markers the delivery sanitizer removes.
+ */
+function rawAssistantContentText(message: AssistantMessage): string {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const record = block as { type?: unknown; text?: unknown };
+      return record.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -649,9 +675,31 @@ export function handleMessageEnd(
   // reminders were eaten, discardedChars exactly the tagless length). Phase
   // attribution IS the provenance the gate exists to check — accept it.
   const visibleTextIsFinalPhase = assistantVisibleTextIsFinalPhase(assistantMessage);
-  const strippedVisibleText = visibleTextIsFinalPhase
+  let strippedVisibleText = visibleTextIsFinalPhase
     ? rawVisibleText
     : ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false });
+  // Plain-text lane (Bedrock et al: no phase annotations): the delivery
+  // sanitizer inside extractAssistantVisibleText already removed literal
+  // <final> markers from rawVisibleText, so the enforcement strip above can
+  // never see them and eats fully compliant replies (2026-07-29 loopback
+  // validation: the model output "<final>…</final>" verbatim and message_end
+  // still discarded it; only delta-streamed turns survived, which cron
+  // announce runs never are). Re-run the extraction on the UNSANITIZED block
+  // text — a non-empty result is tag-attributed content; sanitize it and
+  // deliver.
+  if (
+    ctx.params.enforceFinalTag === true &&
+    strippedVisibleText.trim().length === 0 &&
+    rawVisibleText.trim().length > 0
+  ) {
+    const unsanitizedText = rawAssistantContentText(assistantMessage);
+    if (unsanitizedText) {
+      const enforced = ctx.stripBlockTags(unsanitizedText, { thinking: false, final: false });
+      if (enforced.trim().length > 0) {
+        strippedVisibleText = sanitizeAssistantVisibleText(enforced);
+      }
+    }
+  }
   // enforceFinalTag strips every character the model emitted outside a <final>
   // block. When that strip discards the ENTIRE reply, the turn must end as
   // intentional silence, never as a user-visible error: with zero payloads the

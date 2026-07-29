@@ -855,6 +855,39 @@ describe("handleMessageEnd", () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain("[final-tag]");
   });
 
+  it("recovers a literally-tagged reply the sanitizer de-tagged before the gate", () => {
+    // Bedrock lane: the model wrote "<final>…</final>" as plain text (no phase
+    // annotations). extractAssistantVisibleText sanitizes the markers away, so
+    // the gate's literal-tag strip sees tagless text and returns "" — but the
+    // UNSANITIZED block text still carries the tags, and re-running the
+    // extraction there recovers the compliant reply (2026-07-29 loopback
+    // validation: every cron announce reply died here).
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    // Behave like the real enforcement strip: tagged input yields the inner
+    // content, tagless input yields nothing.
+    (ctx as unknown as { stripBlockTags: (t: string) => string }).stripBlockTags = (t: string) => {
+      const m = /<final>([\s\S]*?)<\/final>/.exec(t);
+      return m ? m[1] : "";
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        // Raw block text keeps the tags; the sanitized visible text will not.
+        content: [{ type: "text", text: "<final>Validation ping — all good.</final>" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Validation ping — all good." }),
+    );
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
   it("accepts final_answer-phase content without re-requiring literal tags", () => {
     // The streaming layer already parsed the model's <final> block into a
     // final_answer-phase text block — the literal tags are consumed and the
