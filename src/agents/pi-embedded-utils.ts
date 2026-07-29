@@ -122,6 +122,18 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
   return extractAssistantTextForPhase(msg).text;
 }
 
+/**
+ * True when extractAssistantVisibleText resolved its text from explicit
+ * final_answer-phase content — i.e. the streaming layer already parsed the
+ * model's <final> block (or a provider-native final channel) and attributed
+ * this text to it, consuming the literal tags in the process. Consumers that
+ * enforce <final> provenance on the visible text must treat this as already
+ * satisfied instead of re-requiring literal tags the extraction removed.
+ */
+export function assistantVisibleTextIsFinalPhase(msg: AssistantMessage): boolean {
+  return extractAssistantTextForPhase(msg, "final_answer").hadRequestedPhase;
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {

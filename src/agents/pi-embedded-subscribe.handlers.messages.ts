@@ -34,6 +34,7 @@ import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
+  assistantVisibleTextIsFinalPhase,
   extractAssistantVisibleText,
   extractThinkingFromTaggedStream,
   extractThinkingFromTaggedText,
@@ -641,7 +642,16 @@ export function handleMessageEnd(
     rawThinking: extractAssistantThinking(assistantMessage),
   });
 
-  const strippedVisibleText = ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false });
+  // The streaming layer may have already parsed the model's <final> block into
+  // final_answer-phase content: extractAssistantVisibleText then returns the
+  // TAGLESS final text, and re-requiring literal tags below would discard a
+  // fully compliant reply whole (2026-07-29: properly wrapped cron make-up
+  // reminders were eaten, discardedChars exactly the tagless length). Phase
+  // attribution IS the provenance the gate exists to check — accept it.
+  const visibleTextIsFinalPhase = assistantVisibleTextIsFinalPhase(assistantMessage);
+  const strippedVisibleText = visibleTextIsFinalPhase
+    ? rawVisibleText
+    : ctx.stripBlockTags(rawVisibleText, { thinking: false, final: false });
   // enforceFinalTag strips every character the model emitted outside a <final>
   // block. When that strip discards the ENTIRE reply, the turn must end as
   // intentional silence, never as a user-visible error: with zero payloads the

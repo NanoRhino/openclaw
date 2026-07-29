@@ -855,6 +855,40 @@ describe("handleMessageEnd", () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain("[final-tag]");
   });
 
+  it("accepts final_answer-phase content without re-requiring literal tags", () => {
+    // The streaming layer already parsed the model's <final> block into a
+    // final_answer-phase text block — the literal tags are consumed and the
+    // visible text is tagless. The gate must accept the phase attribution as
+    // provenance: re-stripping ate every compliant cron announce reply
+    // (2026-07-29 make-up reminders, wrapped correctly and discarded whole).
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    // Literal-tag strip would return "" for this tagless text; the phase
+    // bypass must win before it is consulted.
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          createOpenAiResponsesTextBlock({
+            text: "Sorry about the odd text earlier — all fixed now!",
+            id: "item_final",
+            phase: "final_answer",
+          }),
+        ],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Sorry about the odd text earlier — all fixed now!" }),
+    );
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+
   it("keeps a <final>-wrapped NO_REPLY flowing as a silent reply", () => {
     const finalizeAssistantTexts = vi.fn();
     const ctx = createMessageEndContext({ finalizeAssistantTexts });
