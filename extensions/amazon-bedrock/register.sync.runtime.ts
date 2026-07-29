@@ -95,6 +95,21 @@ function piAiWouldInjectCachePoints(modelId: string): boolean {
 }
 
 /**
+ * Claude 5+ ids support prompt caching (verified live: Bedrock Converse accepts
+ * cachePoint for global.anthropic.claude-sonnet-5), but pi-ai's whitelist above
+ * stops at 4.x, so it emits no cache points for them — every turn re-bills the
+ * full context at the input rate. Match the family segment with letters only so
+ * 4.x ids (claude-sonnet-4-6) and 3.x ids (claude-3-5-sonnet) never hit this
+ * branch. Covers bare ids, system-defined profiles (us./eu./global.), and
+ * inference-profile ARNs, all of which carry the model name.
+ */
+const CLAUDE_5_PLUS_MODEL_RE = /claude-[a-z]+-(?:[5-9]|\d{2,})(?:[-.]|$)/;
+
+function matchesClaude5PlusPromptCachingModelId(modelId: string): boolean {
+  return CLAUDE_5_PLUS_MODEL_RE.test(modelId.toLowerCase());
+}
+
+/**
  * Detect Bedrock application inference profile ARNs — these are the only IDs
  * where pi-ai's model-name-based checks fail because the ARN is opaque.
  * System-defined profiles (us., eu., global.) and base model IDs always
@@ -387,7 +402,14 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
       const heuristicMatch = needsCachePointInjection(modelId);
 
-      const patchesPayload = mayNeedCacheInjection || needsSystemBoundaryReposition;
+      // Claude 5+ ids: pi-ai's stale whitelist emits no cache points, so inject
+      // ours. Guarded on the reposition flag so a future pi-ai that learns 5.x
+      // flips these models to the native+reposition path with no double handling.
+      const claude5PlusNeedsInjection =
+        !needsSystemBoundaryReposition && matchesClaude5PlusPromptCachingModelId(modelId);
+
+      const patchesPayload =
+        mayNeedCacheInjection || needsSystemBoundaryReposition || claude5PlusNeedsInjection;
 
       if (!region && !patchesPayload) {
         return wrapped;
@@ -427,8 +449,11 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           });
         }
 
-        if (heuristicMatch) {
-          // Fast path: ARN heuristic already identified this as Claude.
+        if (heuristicMatch || claude5PlusNeedsInjection) {
+          // Fast path: the ARN heuristic identified this as Claude, or the id is
+          // a Claude 5+ model pi-ai's whitelist doesn't know. injectBedrockCachePoints
+          // is idempotent (hasCachePoint guards), so points a patched pi-ai may
+          // have already emitted are repositioned rather than duplicated.
           return streamWithPayloadPatch(underlying, streamModel, context, merged, (payload) => {
             injectBedrockCachePoints(payload, cacheRetention);
           });

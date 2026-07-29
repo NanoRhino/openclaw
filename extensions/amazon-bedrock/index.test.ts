@@ -647,6 +647,81 @@ describe("amazon-bedrock provider plugin", () => {
       expect(system).toHaveLength(1);
     });
 
+    it("injects cache points for Claude 5+ ids pi-ai's whitelist doesn't know", async () => {
+      // pi-ai's supportsPromptCaching stops at 4.x; without this injection every
+      // Claude 5 turn re-bills the full context at the input rate (the regression
+      // previously papered over by the 009-claude5-prompt-cache dist patch).
+      const provider = await registerWithConfig(undefined);
+      for (const modelId of [
+        "global.anthropic.claude-sonnet-5",
+        "arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-sonnet-5",
+      ]) {
+        const payload: Record<string, unknown> = {
+          system: [{ text: "You are helpful." }],
+          messages: [{ role: "user", content: [{ text: "Hello" }] }],
+        };
+
+        await callWrappedStreamWithPayload(
+          provider,
+          modelId,
+          { id: modelId } as never,
+          { cacheRetention: "short" },
+          payload,
+        );
+
+        const system = payload.system as Array<Record<string, unknown>>;
+        expect(system, modelId).toHaveLength(2);
+        expect(system[1], modelId).toEqual({ cachePoint: { type: "default" } });
+
+        const messages = payload.messages as Array<{
+          role: string;
+          content: Array<Record<string, unknown>>;
+        }>;
+        expect(messages[0].content, modelId).toHaveLength(2);
+        expect(messages[0].content[1], modelId).toEqual({ cachePoint: { type: "default" } });
+      }
+    });
+
+    it("propagates long TTL to injected Claude 5+ cache points", async () => {
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      };
+
+      await callWrappedStreamWithPayload(
+        provider,
+        "global.anthropic.claude-sonnet-5",
+        { id: "global.anthropic.claude-sonnet-5" } as never,
+        { cacheRetention: "long" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system[1]).toEqual({ cachePoint: { type: "default", ttl: "1h" } });
+    });
+
+    it("does not treat 3.x or 4.x ids as Claude 5+ injection targets", async () => {
+      // claude-3-5-sonnet: not in pi-ai's list AND the 5+ family segment is
+      // letters-only, so "3" can't match — no injection, same as before.
+      const provider = await registerWithConfig(undefined);
+      const payload: Record<string, unknown> = {
+        system: [{ text: "You are helpful." }],
+        messages: [{ role: "user", content: [{ text: "Hello" }] }],
+      };
+
+      await callWrappedStreamWithPayload(
+        provider,
+        "anthropic.claude-3-5-sonnet-20240620-v1:0",
+        { id: "anthropic.claude-3-5-sonnet-20240620-v1:0" } as never,
+        { cacheRetention: "short" },
+        payload,
+      );
+
+      const system = payload.system as Array<Record<string, unknown>>;
+      expect(system).toHaveLength(1);
+    });
+
     it("defaults to 'short' cache retention when not explicitly set", async () => {
       const provider = await registerWithConfig(undefined);
       const payload: Record<string, unknown> = {
@@ -668,7 +743,7 @@ describe("amazon-bedrock provider plugin", () => {
       expect(system[1]).toEqual({ cachePoint: { type: "default" } });
     });
 
-    it("injects cache point only on last USER message", async () => {
+    it("places the conversation cache point before the current inbound message", async () => {
       const provider = await registerWithConfig(undefined);
       const payload: Record<string, unknown> = {
         system: [{ text: "You are helpful." }],
@@ -691,13 +766,13 @@ describe("amazon-bedrock provider plugin", () => {
         role: string;
         content: Array<Record<string, unknown>>;
       }>;
-      // First user message should NOT have a cache point
+      // The point caches everything BEFORE the current inbound (whose per-turn
+      // untrusted-metadata prefix must stay outside the cached prefix), so it
+      // lands at the end of the preceding message, and exactly once.
       expect(messages[0].content).toHaveLength(1);
-      // Assistant message untouched
-      expect(messages[1].content).toHaveLength(1);
-      // Last user message should have a cache point
-      expect(messages[2].content).toHaveLength(2);
-      expect(messages[2].content[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(messages[1].content).toHaveLength(2);
+      expect(messages[1].content[1]).toEqual({ cachePoint: { type: "default" } });
+      expect(messages[2].content).toHaveLength(1);
     });
 
     it("injects cache points for opaque application inference profile ARNs after profile lookup", async () => {
