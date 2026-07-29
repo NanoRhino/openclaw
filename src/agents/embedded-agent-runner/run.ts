@@ -2355,6 +2355,39 @@ async function runEmbeddedAgentInternal(
           if (postCompactionAbortError) {
             throw postCompactionAbortError;
           }
+          // P0 delivery boundary (2026-07-29 incident): harness/provider error
+          // strings ("⚠️ Agent couldn't generate a response…", overflow/timeout
+          // notices) must never reach member-facing sessions — one escaped the
+          // reply filter (isError payloads bypass it) and landed as real SMS.
+          // enforceFinalTag is the existing member/operator line (config
+          // defaults true for member agents, operator agents override false),
+          // so suppression couples to the same resolution the gate uses.
+          // Operators keep full error visibility; member sessions end silent
+          // with the error preserved in logs.
+          const suppressErrorPayloadsForMemberSession = resolveEmbeddedEnforceFinalTag({
+            explicit: params.enforceFinalTag,
+            config: params.config,
+            agentId: workspaceResolution.agentId,
+            provider,
+            workspaceDir: resolvedWorkspace,
+            modelId,
+            model: effectiveModel,
+          });
+          const withUserFacingErrorPolicy = <T extends { isError?: boolean }>(
+            payloads: T[],
+          ): T[] => {
+            if (!suppressErrorPayloadsForMemberSession) {
+              return payloads;
+            }
+            const kept = payloads.filter((payload) => !payload.isError);
+            if (kept.length !== payloads.length) {
+              log.warn(
+                `[error-suppress] withheld ${payloads.length - kept.length} error payload(s) ` +
+                  `from member-facing session runId=${params.runId} (enforceFinalTag on)`,
+              );
+            }
+            return kept;
+          };
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
           if (attemptCancellationRequested) {
             throwIfAborted();
@@ -3051,12 +3084,12 @@ async function runEmbeddedAgentInternal(
               livenessState: "blocked",
             });
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: overflowRecoveryText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
@@ -3089,7 +3122,7 @@ async function runEmbeddedAgentInternal(
               livenessState: "blocked",
             });
             return {
-              payloads: [{ text: errorText, isError: true }],
+              payloads: withUserFacingErrorPolicy([{ text: errorText, isError: true }]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({
@@ -3198,14 +3231,14 @@ async function runEmbeddedAgentInternal(
                 livenessState: "blocked",
               });
               return {
-                payloads: [
+                payloads: withUserFacingErrorPolicy([
                   {
                     text:
                       "Message ordering conflict - please try again. " +
                       "If this persists, use /new to start a fresh session.",
                     isError: true,
                   },
-                ],
+                ]),
                 meta: {
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
@@ -3239,14 +3272,14 @@ async function runEmbeddedAgentInternal(
                 livenessState: "blocked",
               });
               return {
-                payloads: [
+                payloads: withUserFacingErrorPolicy([
                   {
                     text:
                       `Image too large for the model${maxBytesHint}. ` +
                       "Please compress or resize the image and try again.",
                     isError: true,
                   },
-                ],
+                ]),
                 meta: {
                   durationMs: Date.now() - started,
                   agentMeta: buildErrorAgentMeta({
@@ -3826,13 +3859,13 @@ async function runEmbeddedAgentInternal(
               providerStarted,
             });
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
                 {
                   text: timeoutText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -4045,12 +4078,12 @@ async function runEmbeddedAgentInternal(
               });
             }
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: incompletePayloadText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
@@ -4135,14 +4168,14 @@ async function runEmbeddedAgentInternal(
             }
 
             return {
-              payloads: [
+              payloads: withUserFacingErrorPolicy([
                 {
                   text: terminalToolPresentation
                     ? terminalToolPresentation.concat("\n\n", incompleteTurnText)
                     : incompleteTurnText,
                   isError: true,
                 },
-              ],
+              ]),
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
