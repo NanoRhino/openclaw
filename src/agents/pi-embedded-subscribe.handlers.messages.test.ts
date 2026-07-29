@@ -853,6 +853,29 @@ describe("handleMessageEnd", () => {
     const warn = ctx.log.warn as unknown as ReturnType<typeof vi.fn>;
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain("[final-tag]");
+    // And the runner-facing flag is raised so the wrap-in-<final> retry can
+    // recover the reply instead of ending the member's turn in silence.
+    expect(ctx.state.finalTagDiscardedEntireReply).toBe(true);
+  });
+
+  it("does not raise the discard flag for a bare NO_REPLY sentinel", () => {
+    const finalizeAssistantTexts = vi.fn();
+    const ctx = createMessageEndContext({ finalizeAssistantTexts });
+    Object.assign(ctx.params, { enforceFinalTag: true, agentId: "nutritionist-1" });
+    (ctx as unknown as { stripBlockTags: () => string }).stripBlockTags = () => "";
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "NO_REPLY" }],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    // Intentional silence: no retry signal, no canary.
+    expect(ctx.state.finalTagDiscardedEntireReply).not.toBe(true);
+    expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it("recovers a literally-tagged reply the sanitizer de-tagged before the gate", () => {

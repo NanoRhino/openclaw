@@ -2061,6 +2061,7 @@ export async function runEmbeddedAttempt(
         setTerminalLifecycleMeta,
         getUsageTotals,
         getCompactionCount,
+        wasFinalTagEntireReplyDiscarded,
       } = subscription;
 
       const queueHandle: EmbeddedPiQueueHandle & {
@@ -3079,6 +3080,7 @@ export async function runEmbeddedAttempt(
         finalPromptText,
         messagesSnapshot,
         assistantTexts,
+        finalTagDiscardedEntireReply: wasFinalTagEntireReplyDiscarded(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         currentAttemptAssistant,

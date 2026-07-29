@@ -75,6 +75,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const useMarkdown = toolResultFormat === "markdown";
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
+    finalTagDiscardedEntireReply: false,
     assistantTexts: [],
     toolMetas: [],
     toolMetaById: new Map(),
@@ -850,6 +851,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     assistantTexts,
     toolMetas,
     unsubscribe,
+    wasFinalTagEntireReplyDiscarded: () => state.finalTagDiscardedEntireReply === true,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;
