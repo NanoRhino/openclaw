@@ -17,16 +17,19 @@ describe("tool allowlist guard", () => {
     expect(error?.message).toContain("no registered tools matched");
   });
 
-  it("fails closed for runtime toolsAllow when tools are disabled", () => {
-    const error = buildEmptyExplicitToolAllowlistError({
-      sources: [{ label: "runtime toolsAllow", entries: ["query_db"] }],
-      callableToolNames: [],
-      toolsEnabled: true,
-      disableTools: true,
-    });
-
-    expect(error?.message).toContain("runtime toolsAllow: query_db");
-    expect(error?.message).toContain("tools are disabled for this run");
+  it("allows a deliberately tool-less run even with an explicit allowlist", () => {
+    // disableTools is an internal, intentional state (e.g. the final-tag
+    // discard retry on a side-effect turn) — not an allowlist mistake.
+    // 2026-07-30: erroring here crashed the retry into surface_error for
+    // every production coach agent (they all carry agents.<id>.tools.allow).
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "runtime toolsAllow", entries: ["query_db"] }],
+        callableToolNames: [],
+        toolsEnabled: true,
+        disableTools: true,
+      }),
+    ).toBeNull();
   });
 
   it("fails closed when the selected model cannot use requested tools", () => {
