@@ -7,6 +7,7 @@ import {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import { _filterReplyText } from "./reply-filter/filter-v5.vendored.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
 import type { GetReplyFromConfig } from "./reply/get-reply.types.js";
@@ -148,8 +149,32 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   replyResolver?: GetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
-  const beforeDeliver =
+  const rfOrigBeforeDeliver =
     params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx);
+  // ── patch-002: reply filter (beforeDeliver) — source-native port ──
+  // Interactive user→plugin replies pass the reply filter (fail-open dispatch
+  // semantics; config ~/.openclaw/reply-filter.json, disabled unless enabled
+  // there). Formerly injected into dist by openclaw-infra
+  // patches/002-reply-filter-v5; vendored 2026-07-30.
+  const rfSessionKey = params.ctx?.SessionKey;
+  const beforeDeliver: ReplyDispatchBeforeDeliver = async (payload, info) => {
+    let deliverPayload = rfOrigBeforeDeliver ? await rfOrigBeforeDeliver(payload, info) : payload;
+    if (!deliverPayload) {
+      return deliverPayload;
+    }
+    if (deliverPayload.text) {
+      const fr = await _filterReplyText(deliverPayload.text, params.cfg, rfSessionKey);
+      if (fr.drop) {
+        return null;
+      }
+      deliverPayload = { ...deliverPayload, text: fr.text };
+      if (!deliverPayload.text?.trim()) {
+        return null;
+      }
+    }
+    return deliverPayload;
+  };
+  // ── end patch-002 (beforeDeliver) ──
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,

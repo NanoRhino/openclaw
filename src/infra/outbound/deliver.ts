@@ -1,4 +1,5 @@
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { _filterReplyText } from "../../auto-reply/reply-filter/filter-v5.vendored.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type {
@@ -857,6 +858,31 @@ async function deliverOutboundPayloadsCore(
     }
   };
   const normalizedPayloads = normalizePayloadsForChannelDelivery(outboundPayloadPlan, handler);
+  // ── patch-002: reply filter (delivery chokepoint) — source-native port ──
+  // Every outbound text passes the reply filter (regex → Bedrock Haiku
+  // classifier → per-agent include/exclude, config ~/.openclaw/reply-filter.json,
+  // disabled unless that file enables it). The deliver path is fail-closed
+  // ({ path: "deliver" }) — it is the historical leak source for cron/announce
+  // output. Formerly injected into dist by openclaw-infra
+  // patches/002-reply-filter-v5; vendored 2026-07-30 so a dist swap can never
+  // ship without it again.
+  {
+    const rfKey = params.mirror?.sessionKey ?? params.session?.key;
+    for (let i = normalizedPayloads.length - 1; i >= 0; i--) {
+      const p = normalizedPayloads[i];
+      if (p?.text) {
+        const fr = await _filterReplyText(p.text, params.cfg, rfKey, { path: "deliver" });
+        if (fr.drop) {
+          normalizedPayloads.splice(i, 1);
+          continue;
+        }
+        p.text = fr.text;
+      }
+    }
+    if (normalizedPayloads.length === 0) {
+      return [];
+    }
+  }
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
