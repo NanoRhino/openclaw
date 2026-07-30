@@ -3,15 +3,17 @@ import { resolveFinalTagDiscardRetryInstruction } from "./incomplete-turn.js";
 
 // Minimal attempt fixture: only the fields the resolver reads. The 2026-07-29
 // silent-drop incident contract: a turn whose ENTIRE reply the gate discarded,
-// with nothing else delivered, must be retried once — never end as unexplained
+// with nothing else delivered, must be recovered — never end as unexplained
 // silence for a member who just sent a message. Extended 2026-07-30: turns
 // that completed a mutating tool action (weigh-in save, meal log — nearly
-// every real coaching turn) retry too, with tools hard-disabled so the
-// mutation cannot repeat.
+// every real coaching turn) recover by SALVAGING the discarded text (no model
+// re-run: Bedrock rejects tool-bearing transcripts without toolConfig, and a
+// resubmission with tools could repeat the mutation).
 function makeAttempt(overrides: Record<string, unknown> = {}) {
   return {
     assistantTexts: ["NO_REPLY"],
     finalTagDiscardedEntireReply: true,
+    finalTagDiscardedText: "Down to 242.2 — nice steady progress.",
     messagingToolSentTexts: [] as string[],
     didSendViaMessagingTool: false,
     replayMetadata: { hadPotentialSideEffects: false },
@@ -21,16 +23,17 @@ function makeAttempt(overrides: Record<string, unknown> = {}) {
 }
 
 describe("resolveFinalTagDiscardRetryInstruction", () => {
-  it("fires when the gate ate the whole reply and nothing was delivered", () => {
+  it("retries when the gate ate the whole reply and nothing was delivered", () => {
     const plan = resolveFinalTagDiscardRetryInstruction({
       aborted: false,
       timedOut: false,
       attempt: makeAttempt(),
     });
-    expect(plan).not.toBeNull();
-    expect(plan?.instruction).toContain("<final></final>");
-    expect(plan?.instruction).toContain("discarded");
-    expect(plan?.disableTools).toBe(false);
+    expect(plan?.kind).toBe("retry");
+    if (plan?.kind === "retry") {
+      expect(plan.instruction).toContain("<final></final>");
+      expect(plan.instruction).toContain("discarded");
+    }
   });
 
   it("fires when assistantTexts is fully empty (pre-sentinel shape)", () => {
@@ -75,20 +78,43 @@ describe("resolveFinalTagDiscardRetryInstruction", () => {
     ).toBeNull();
   });
 
-  it("fires WITH tools disabled when the attempt recorded potential side effects", () => {
+  it("salvages the discarded text when the attempt recorded potential side effects", () => {
     // 2026-07-30 incident (050244/050225): weight saved via tool, untagged
-    // confirmation eaten, member got pure silence because the old side-effect
-    // veto skipped the retry entirely. The mutating shape must retry — with
-    // the tool surface emptied so the completed mutation cannot repeat.
+    // confirmation eaten, member got pure silence. A model re-run is unsafe
+    // here (duplicate mutation; Bedrock toolConfig contract), so the eaten
+    // text itself becomes the reply payload — default-deliver-over-silence.
     const plan = resolveFinalTagDiscardRetryInstruction({
       aborted: false,
       timedOut: false,
       attempt: makeAttempt({ replayMetadata: { hadPotentialSideEffects: true } }),
     });
-    expect(plan).not.toBeNull();
-    expect(plan?.disableTools).toBe(true);
-    expect(plan?.instruction).toContain("do NOT try to call any tool");
-    expect(plan?.instruction).toContain("<final></final>");
+    expect(plan?.kind).toBe("salvage");
+    if (plan?.kind === "salvage") {
+      expect(plan.text).toBe("Down to 242.2 — nice steady progress.");
+    }
+  });
+
+  it("side-effect turns end silent when no discarded text was captured", () => {
+    expect(
+      resolveFinalTagDiscardRetryInstruction({
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttempt({
+          replayMetadata: { hadPotentialSideEffects: true },
+          finalTagDiscardedText: "   ",
+        }),
+      }),
+    ).toBeNull();
+    expect(
+      resolveFinalTagDiscardRetryInstruction({
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttempt({
+          replayMetadata: { hadPotentialSideEffects: true },
+          finalTagDiscardedText: undefined,
+        }),
+      }),
+    ).toBeNull();
   });
 
   it("side-effect turns still respect the messaging-tool delivered veto", () => {

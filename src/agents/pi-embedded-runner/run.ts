@@ -604,7 +604,6 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let finalTagDiscardRetryAttempts = 0;
-      let finalTagRetryDisableTools = false;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -875,7 +874,7 @@ export async function runEmbeddedPiAgent(
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
-            disableTools: params.disableTools || finalTagRetryDisableTools,
+            disableTools: params.disableTools,
             provider,
             modelId,
             // Use the harness selected before model/auth setup for the actual
@@ -1914,6 +1913,11 @@ export async function runEmbeddedPiAgent(
           }
 
           const payloadCount = payloadsWithToolMedia?.length ?? 0;
+          // Set when the final-tag salvage path fires (side-effect turn whose
+          // entire reply the gate ate): the discarded text becomes the reply
+          // payload and the run completes normally — it still passes the
+          // reply filter on the deliver path.
+          let finalTagSalvagePayloads: Array<{ text: string }> | null = null;
           const nextPlanningOnlyRetryInstruction = resolvePlanningOnlyRetryInstruction({
             provider,
             modelId,
@@ -1947,22 +1951,27 @@ export async function runEmbeddedPiAgent(
           });
           if (nextFinalTagDiscardRetryPlan && finalTagDiscardRetryAttempts < 1) {
             finalTagDiscardRetryAttempts += 1;
-            // Reuse the reasoning-only injection channel: the instruction rides
-            // the same next-attempt prompt slot; only the steer text differs.
-            reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryPlan.instruction;
-            // Side-effect turns retry with the tool surface emptied so the
-            // model cannot repeat a completed mutation (double weight/meal
-            // write). Sticky for the rest of the run: any later attempt is
-            // still only trying to recover the same eaten reply text.
-            if (nextFinalTagDiscardRetryPlan.disableTools) {
-              finalTagRetryDisableTools = true;
+            if (nextFinalTagDiscardRetryPlan.kind === "retry") {
+              // Reuse the reasoning-only injection channel: the instruction rides
+              // the same next-attempt prompt slot; only the steer text differs.
+              reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryPlan.instruction;
+              log.warn(
+                `[final-tag] entire reply discarded with nothing delivered: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer`,
+              );
+              continue;
             }
+            // Side-effect turn: no model re-run (a resubmission could repeat
+            // the completed mutation, and Bedrock rejects tool-bearing
+            // transcripts without toolConfig — 2026-07-30, .23/.24). Deliver
+            // the eaten text itself; the reply filter still screens it on the
+            // deliver path. Default-deliver-over-silence (Jason, 2026-07-30).
+            finalTagSalvagePayloads = [{ text: nextFinalTagDiscardRetryPlan.text }];
             log.warn(
-              `[final-tag] entire reply discarded with nothing delivered: runId=${params.runId} ` +
-                `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer` +
-                `${nextFinalTagDiscardRetryPlan.disableTools ? " (tools disabled: side-effect turn)" : ""}`,
+              `[final-tag] entire reply discarded on a side-effect turn: runId=${params.runId} ` +
+                `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
             );
-            continue;
           }
           if (
             nextPlanningOnlyRetryInstruction &&
@@ -2202,7 +2211,7 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
-          if (incompleteTurnText) {
+          if (incompleteTurnText && !finalTagSalvagePayloads) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
               payloadCount: payloads.length,
@@ -2292,8 +2301,9 @@ export async function runEmbeddedPiAgent(
             replayInvalid,
             livenessState,
           });
+          const effectiveRunPayloads = finalTagSalvagePayloads ?? payloadsWithToolMedia;
           return {
-            payloads: payloadsWithToolMedia?.length ? payloadsWithToolMedia : undefined,
+            payloads: effectiveRunPayloads?.length ? effectiveRunPayloads : undefined,
             ...(attempt.diagnosticTrace
               ? { diagnosticTrace: freezeDiagnosticTraceContext(attempt.diagnosticTrace) }
               : {}),

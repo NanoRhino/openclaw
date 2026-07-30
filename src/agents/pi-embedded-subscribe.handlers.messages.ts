@@ -728,6 +728,7 @@ export function handleMessageEnd(
     // instruction so the member still gets their answer (2026-07-29 incident:
     // silent drops on live user messages).
     ctx.state.finalTagDiscardedEntireReply = true;
+    ctx.state.finalTagDiscardedText = rawVisibleText;
     ctx.log.warn(
       `[final-tag] discarded reply with no <final> tag ` +
         `agentId=${ctx.params.agentId ?? "unknown"} ` +

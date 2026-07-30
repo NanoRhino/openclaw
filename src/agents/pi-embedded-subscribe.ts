@@ -852,6 +852,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     toolMetas,
     unsubscribe,
     wasFinalTagEntireReplyDiscarded: () => state.finalTagDiscardedEntireReply === true,
+    getFinalTagDiscardedText: () => state.finalTagDiscardedText,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;

@@ -89,6 +89,11 @@ export type EmbeddedRunAttemptResult = {
    * this attempt — real content was lost, not intentional silence. Feeds the
    * runner's one-shot wrap-in-<final> retry (2026-07-29 silent-drop incident). */
   finalTagDiscardedEntireReply?: boolean;
+  /** Raw visible text the gate discarded. Side-effect turns salvage this as
+   * the reply payload instead of re-running the model (2026-07-30 incident:
+   * Bedrock rejects tool-bearing transcripts without toolConfig, and a
+   * resubmission with tools could repeat the mutation). */
+  finalTagDiscardedText?: string;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

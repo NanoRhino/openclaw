@@ -24,6 +24,7 @@ type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
   | "finalTagDiscardedEntireReply"
+  | "finalTagDiscardedText"
   | "clientToolCall"
   | "currentAttemptAssistant"
   | "yieldDetected"
@@ -345,17 +346,23 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
-export type FinalTagDiscardRetryPlan = {
-  instruction: string;
-  /**
-   * The attempt completed a mutating tool action, so the retry attempt must
-   * run with tools hard-disabled at the API layer: the model cannot re-run the
-   * mutation (double weight save / double meal log) no matter what it decides.
-   * The tool results are already in the session transcript, so a text-only
-   * continuation is all that's needed to recover the eaten reply.
-   */
-  disableTools: boolean;
-};
+export type FinalTagDiscardRetryPlan =
+  | {
+      /** Re-run the model once with a wrap-in-<final> steer (no completed
+       * mutation on the attempt, so a resubmission is safe). */
+      kind: "retry";
+      instruction: string;
+    }
+  | {
+      /** The attempt completed a mutating tool action: a resubmission could
+       * repeat the mutation, and a tool-less re-run is rejected by Bedrock
+       * (tool-bearing transcript requires toolConfig — 2026-07-30, .24).
+       * Deliver the discarded text itself as the reply payload; it still
+       * passes the reply filter on the way out. Default-deliver-over-silence
+       * (Jason, 2026-07-30). */
+      kind: "salvage";
+      text: string;
+    };
 
 /**
  * One-shot recovery for a turn whose ENTIRE reply the enforceFinalTag gate
@@ -364,16 +371,13 @@ export type FinalTagDiscardRetryPlan = {
  * silence for a message they just sent (2026-07-29 incident: live meal logs
  * answered with nothing). Unlike the reasoning-only/empty-response retries this
  * is NOT provider-gated — the failure is our own gate contract, not a model
- * harness contract, so every provider that runs under the gate gets the retry.
+ * harness contract, so every provider that runs under the gate gets recovery.
  *
  * Side-effect turns are NOT excluded (2026-07-30 incident, agents 050244 and
  * 050225: weigh-in saves succeeded, confirmations were eaten, members got pure
  * silence — nearly every real coaching turn mutates something, so a
- * side-effect veto excluded exactly the shape that matters). Instead of
- * skipping, a side-effect retry runs with tools disabled, which removes the
- * duplicate-action risk deterministically rather than by model compliance
- * (the .18 floor holds: no resubmission can repeat a mutation when the tool
- * surface is empty).
+ * side-effect veto excluded exactly the shape that matters). They recover via
+ * salvage instead of retry: no second model call, no duplicate-mutation risk.
  */
 export function resolveFinalTagDiscardRetryInstruction(params: {
   aborted: boolean;
@@ -399,24 +403,19 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
     return null;
   }
   if (params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return {
-      instruction:
-        "Your entire previous reply was discarded because it was not wrapped " +
-        "in <final></final> tags — the user has received NOTHING. Your tool " +
-        "calls already completed and their results are in this conversation; " +
-        "tools are disabled for this retry, so do NOT try to call any tool. " +
-        "Resend your reply as plain text now, wrapped in <final></final> " +
-        "tags. Only text inside <final> is delivered to the user.",
-      disableTools: true,
-    };
+    const salvageText = (params.attempt.finalTagDiscardedText ?? "").trim();
+    if (!salvageText || isSilentReplyPayloadText(salvageText, SILENT_REPLY_TOKEN)) {
+      return null;
+    }
+    return { kind: "salvage", text: salvageText };
   }
   return {
+    kind: "retry",
     instruction:
       "Your entire previous reply was discarded because it was not wrapped in " +
       "<final></final> tags — the user has received NOTHING. Send your reply " +
       "again now, wrapped in <final></final> tags. Only text inside <final> is " +
       "delivered to the user.",
-    disableTools: false,
   };
 }
 

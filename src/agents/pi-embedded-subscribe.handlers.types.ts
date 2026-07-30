@@ -56,6 +56,12 @@ export type EmbeddedPiSubscribeState = {
    * attempt. Read by the runner's final-tag discard retry (the turn must not
    * end as unexplained silence for the member — 2026-07-29 incident). */
   finalTagDiscardedEntireReply?: boolean;
+  /** The raw visible text the gate discarded. Side-effect turns cannot safely
+   * re-run the model (Bedrock rejects tool-bearing transcripts without
+   * toolConfig; resubmission with tools risks duplicate mutations), so the
+   * runner salvages this text as the reply payload instead — it still passes
+   * the reply filter on the deliver path (2026-07-30 incident). */
+  finalTagDiscardedText?: string;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;
