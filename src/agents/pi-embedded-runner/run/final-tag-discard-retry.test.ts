@@ -4,7 +4,10 @@ import { resolveFinalTagDiscardRetryInstruction } from "./incomplete-turn.js";
 // Minimal attempt fixture: only the fields the resolver reads. The 2026-07-29
 // silent-drop incident contract: a turn whose ENTIRE reply the gate discarded,
 // with nothing else delivered, must be retried once — never end as unexplained
-// silence for a member who just sent a message.
+// silence for a member who just sent a message. Extended 2026-07-30: turns
+// that completed a mutating tool action (weigh-in save, meal log — nearly
+// every real coaching turn) retry too, with tools hard-disabled so the
+// mutation cannot repeat.
 function makeAttempt(overrides: Record<string, unknown> = {}) {
   return {
     assistantTexts: ["NO_REPLY"],
@@ -19,22 +22,24 @@ function makeAttempt(overrides: Record<string, unknown> = {}) {
 
 describe("resolveFinalTagDiscardRetryInstruction", () => {
   it("fires when the gate ate the whole reply and nothing was delivered", () => {
-    const instruction = resolveFinalTagDiscardRetryInstruction({
+    const plan = resolveFinalTagDiscardRetryInstruction({
       aborted: false,
       timedOut: false,
       attempt: makeAttempt(),
     });
-    expect(instruction).toContain("<final></final>");
-    expect(instruction).toContain("discarded");
+    expect(plan).not.toBeNull();
+    expect(plan?.instruction).toContain("<final></final>");
+    expect(plan?.instruction).toContain("discarded");
+    expect(plan?.disableTools).toBe(false);
   });
 
   it("fires when assistantTexts is fully empty (pre-sentinel shape)", () => {
-    const instruction = resolveFinalTagDiscardRetryInstruction({
+    const plan = resolveFinalTagDiscardRetryInstruction({
       aborted: false,
       timedOut: false,
       attempt: makeAttempt({ assistantTexts: [] }),
     });
-    expect(instruction).not.toBeNull();
+    expect(plan).not.toBeNull();
   });
 
   it("does not fire without the discard flag (genuine intentional silence)", () => {
@@ -70,12 +75,32 @@ describe("resolveFinalTagDiscardRetryInstruction", () => {
     ).toBeNull();
   });
 
-  it("does not fire when the attempt recorded potential side effects", () => {
+  it("fires WITH tools disabled when the attempt recorded potential side effects", () => {
+    // 2026-07-30 incident (050244/050225): weight saved via tool, untagged
+    // confirmation eaten, member got pure silence because the old side-effect
+    // veto skipped the retry entirely. The mutating shape must retry — with
+    // the tool surface emptied so the completed mutation cannot repeat.
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({ replayMetadata: { hadPotentialSideEffects: true } }),
+    });
+    expect(plan).not.toBeNull();
+    expect(plan?.disableTools).toBe(true);
+    expect(plan?.instruction).toContain("do NOT try to call any tool");
+    expect(plan?.instruction).toContain("<final></final>");
+  });
+
+  it("side-effect turns still respect the messaging-tool delivered veto", () => {
     expect(
       resolveFinalTagDiscardRetryInstruction({
         aborted: false,
         timedOut: false,
-        attempt: makeAttempt({ replayMetadata: { hadPotentialSideEffects: true } }),
+        attempt: makeAttempt({
+          replayMetadata: { hadPotentialSideEffects: true },
+          messagingToolSentTexts: ["📝 Breakfast logged!"],
+          didSendViaMessagingTool: true,
+        }),
       }),
     ).toBeNull();
   });

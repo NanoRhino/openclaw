@@ -345,6 +345,18 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+export type FinalTagDiscardRetryPlan = {
+  instruction: string;
+  /**
+   * The attempt completed a mutating tool action, so the retry attempt must
+   * run with tools hard-disabled at the API layer: the model cannot re-run the
+   * mutation (double weight save / double meal log) no matter what it decides.
+   * The tool results are already in the session transcript, so a text-only
+   * continuation is all that's needed to recover the eaten reply.
+   */
+  disableTools: boolean;
+};
+
 /**
  * One-shot recovery for a turn whose ENTIRE reply the enforceFinalTag gate
  * discarded (model wrote real content but never opened a <final> block, and no
@@ -353,15 +365,21 @@ function shouldSkipPlanningOnlyRetry(params: {
  * answered with nothing). Unlike the reasoning-only/empty-response retries this
  * is NOT provider-gated — the failure is our own gate contract, not a model
  * harness contract, so every provider that runs under the gate gets the retry.
- * Side-effect guard mirrors the other resolvers: if the attempt already sent
- * via the messaging tool or recorded potential side effects, resubmission could
- * duplicate actions — end silent instead (the .18 floor).
+ *
+ * Side-effect turns are NOT excluded (2026-07-30 incident, agents 050244 and
+ * 050225: weigh-in saves succeeded, confirmations were eaten, members got pure
+ * silence — nearly every real coaching turn mutates something, so a
+ * side-effect veto excluded exactly the shape that matters). Instead of
+ * skipping, a side-effect retry runs with tools disabled, which removes the
+ * duplicate-action risk deterministically rather than by model compliance
+ * (the .18 floor holds: no resubmission can repeat a mutation when the tool
+ * surface is empty).
  */
 export function resolveFinalTagDiscardRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
-}): string | null {
+}): FinalTagDiscardRetryPlan | null {
   if (params.aborted || params.timedOut) {
     return null;
   }
@@ -374,21 +392,32 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
   if (params.attempt.didSendViaMessagingTool) {
     return null;
   }
-  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return null;
-  }
   // Only when nothing user-visible survived: the restored silent sentinel (or
   // nothing at all) is the whole visible outcome.
   const visible = params.attempt.assistantTexts.join("\n\n").trim();
   if (visible && visible !== SILENT_REPLY_TOKEN) {
     return null;
   }
-  return (
-    "Your entire previous reply was discarded because it was not wrapped in " +
-    "<final></final> tags — the user has received NOTHING. Send your reply " +
-    "again now, wrapped in <final></final> tags. Only text inside <final> is " +
-    "delivered to the user."
-  );
+  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+    return {
+      instruction:
+        "Your entire previous reply was discarded because it was not wrapped " +
+        "in <final></final> tags — the user has received NOTHING. Your tool " +
+        "calls already completed and their results are in this conversation; " +
+        "tools are disabled for this retry, so do NOT try to call any tool. " +
+        "Resend your reply as plain text now, wrapped in <final></final> " +
+        "tags. Only text inside <final> is delivered to the user.",
+      disableTools: true,
+    };
+  }
+  return {
+    instruction:
+      "Your entire previous reply was discarded because it was not wrapped in " +
+      "<final></final> tags — the user has received NOTHING. Send your reply " +
+      "again now, wrapped in <final></final> tags. Only text inside <final> is " +
+      "delivered to the user.",
+    disableTools: false,
+  };
 }
 
 export function resolveReasoningOnlyRetryInstruction(params: {

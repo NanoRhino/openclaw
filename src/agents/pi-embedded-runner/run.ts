@@ -604,6 +604,7 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let finalTagDiscardRetryAttempts = 0;
+      let finalTagRetryDisableTools = false;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -874,7 +875,7 @@ export async function runEmbeddedPiAgent(
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
-            disableTools: params.disableTools,
+            disableTools: params.disableTools || finalTagRetryDisableTools,
             provider,
             modelId,
             // Use the harness selected before model/auth setup for the actual
@@ -1939,19 +1940,27 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
-          const nextFinalTagDiscardRetryInstruction = resolveFinalTagDiscardRetryInstruction({
+          const nextFinalTagDiscardRetryPlan = resolveFinalTagDiscardRetryInstruction({
             aborted,
             timedOut,
             attempt,
           });
-          if (nextFinalTagDiscardRetryInstruction && finalTagDiscardRetryAttempts < 1) {
+          if (nextFinalTagDiscardRetryPlan && finalTagDiscardRetryAttempts < 1) {
             finalTagDiscardRetryAttempts += 1;
             // Reuse the reasoning-only injection channel: the instruction rides
             // the same next-attempt prompt slot; only the steer text differs.
-            reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryInstruction;
+            reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryPlan.instruction;
+            // Side-effect turns retry with the tool surface emptied so the
+            // model cannot repeat a completed mutation (double weight/meal
+            // write). Sticky for the rest of the run: any later attempt is
+            // still only trying to recover the same eaten reply text.
+            if (nextFinalTagDiscardRetryPlan.disableTools) {
+              finalTagRetryDisableTools = true;
+            }
             log.warn(
               `[final-tag] entire reply discarded with nothing delivered: runId=${params.runId} ` +
-                `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer`,
+                `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer` +
+                `${nextFinalTagDiscardRetryPlan.disableTools ? " (tools disabled: side-effect turn)" : ""}`,
             );
             continue;
           }
