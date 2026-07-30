@@ -38,6 +38,8 @@ type ReplayMetadataAttempt = Pick<
 type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "finalTagDiscardedEntireReply"
+  | "finalTagDiscardedText"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "yieldDetected"
@@ -672,6 +674,74 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
     payloadCount: params.payloadCount,
     attempt: params.attempt,
   });
+}
+
+export type FinalTagDiscardRetryPlan =
+  | {
+      /** Re-run the model once with a wrap-in-<final> steer (no completed
+       * mutation on the attempt, so a resubmission is safe). */
+      kind: "retry";
+      instruction: string;
+    }
+  | {
+      /** The attempt completed a mutating tool action: a resubmission could
+       * repeat the mutation, and a tool-less re-run is rejected by Bedrock
+       * (tool-bearing transcript requires toolConfig). Deliver the discarded
+       * text itself as the reply payload; it still passes the reply filter on
+       * the way out. Default-deliver-over-silence (ported from the 4.24 line,
+       * 2026-07-30). */
+      kind: "salvage";
+      text: string;
+    };
+
+/**
+ * One-shot recovery for a turn whose ENTIRE reply the enforceFinalTag gate
+ * discarded (model wrote real content but never opened a <final> block, and no
+ * messaging-tool send delivered anything). Without this the member gets pure
+ * silence for a message they just sent (2026-07-29/30 incidents on the 4.24
+ * line: live meal logs and weigh-ins answered with nothing). Not
+ * provider-gated — the failure is our own gate contract. Side-effect turns
+ * recover via salvage instead of retry: no second model call, no
+ * duplicate-mutation risk.
+ */
+export function resolveFinalTagDiscardRetryInstruction(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): FinalTagDiscardRetryPlan | null {
+  if (params.aborted || params.timedOut) {
+    return null;
+  }
+  if (params.attempt.finalTagDiscardedEntireReply !== true) {
+    return null;
+  }
+  if ((params.attempt.messagingToolSentTexts?.length ?? 0) > 0) {
+    return null;
+  }
+  if (params.attempt.didSendViaMessagingTool) {
+    return null;
+  }
+  // Only when nothing user-visible survived: the restored silent sentinel (or
+  // nothing at all) is the whole visible outcome.
+  const visible = params.attempt.assistantTexts.join("\n\n").trim();
+  if (visible && visible !== SILENT_REPLY_TOKEN) {
+    return null;
+  }
+  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+    const salvageText = (params.attempt.finalTagDiscardedText ?? "").trim();
+    if (!salvageText || isSilentReplyPayloadText(salvageText, SILENT_REPLY_TOKEN)) {
+      return null;
+    }
+    return { kind: "salvage", text: salvageText };
+  }
+  return {
+    kind: "retry",
+    instruction:
+      "Your entire previous reply was discarded because it was not wrapped in " +
+      "<final></final> tags — the user has received NOTHING. Send your reply " +
+      "again now, wrapped in <final></final> tags. Only text inside <final> is " +
+      "delivered to the user.",
+  };
 }
 
 /**

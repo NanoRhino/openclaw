@@ -204,6 +204,16 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** The enforceFinalTag gate discarded an ENTIRE non-sentinel reply during
+   * this attempt — real content was lost, not intentional silence. Feeds the
+   * runner's final-tag recovery (retry / salvage; ported from the 4.24 line
+   * 2026-07-30). */
+  finalTagDiscardedEntireReply?: boolean;
+  /** Raw visible text the gate discarded. Side-effect turns salvage this as
+   * the reply payload instead of re-running the model (Bedrock rejects
+   * tool-bearing transcripts without toolConfig; a resubmission with tools
+   * could repeat the mutation). */
+  finalTagDiscardedText?: string;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;

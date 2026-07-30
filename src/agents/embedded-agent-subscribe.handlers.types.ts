@@ -130,6 +130,16 @@ export type EmbeddedAgentSubscribeState = {
   deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
+  /** The enforceFinalTag gate discarded an ENTIRE non-sentinel reply this
+   * attempt. Read by the runner's final-tag discard recovery (retry or
+   * salvage — the turn must not end as unexplained silence for a member;
+   * ported from the 4.24 line 2026-07-30). */
+  finalTagDiscardedEntireReply?: boolean;
+  /** The raw visible text the gate discarded. Side-effect turns salvage this
+   * as the reply payload (no model re-run: resubmission could repeat the
+   * mutation, and Bedrock rejects tool-bearing transcripts without
+   * toolConfig); it still passes the reply filter on the deliver path. */
+  finalTagDiscardedText?: string;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;

@@ -228,6 +228,7 @@ import {
   resolveAttemptReplayMetadata,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
+  resolveFinalTagDiscardRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
   resolveReplayInvalidFlag,
@@ -1630,6 +1631,7 @@ async function runEmbeddedAgentInternal(
       let consecutiveSameModelRateLimitRetries = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let finalTagDiscardRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
       let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
@@ -3922,6 +3924,50 @@ async function runEmbeddedAgentInternal(
                 ? [silentToolResultReplyPayload]
                 : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
+          // Set when the final-tag salvage path fires (side-effect turn whose
+          // entire reply the gate ate): the discarded text becomes the reply
+          // payload and the run completes normally — it still passes the
+          // reply filter on the deliver path. Ported from the 4.24 line
+          // (2026-07-30 silent-drop incidents).
+          let finalTagSalvagePayloads: Array<{ text: string }> | null = null;
+          const nextFinalTagDiscardRetryPlan = resolveFinalTagDiscardRetryInstruction({
+            aborted,
+            timedOut,
+            attempt,
+          });
+          if (nextFinalTagDiscardRetryPlan && finalTagDiscardRetryAttempts < 1) {
+            finalTagDiscardRetryAttempts += 1;
+            if (nextFinalTagDiscardRetryPlan.kind === "retry") {
+              // Reuse the reasoning-only injection channel: the instruction
+              // rides the same next-attempt prompt slot; only the steer text
+              // differs.
+              reasoningOnlyRetryInstruction = nextFinalTagDiscardRetryPlan.instruction;
+              log.warn(
+                `[final-tag] entire reply discarded with nothing delivered: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — retrying 1/1 with wrap-in-<final> steer`,
+              );
+              continue;
+            }
+            finalTagSalvagePayloads = [{ text: nextFinalTagDiscardRetryPlan.text }];
+            log.warn(
+              `[final-tag] entire reply discarded on a side-effect turn: runId=${params.runId} ` +
+                `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
+            );
+          } else if (nextFinalTagDiscardRetryPlan && !finalTagSalvagePayloads) {
+            // The one wrap-in-<final> retry was already spent and the retried
+            // reply STILL came back untagged and got eaten. Last resort:
+            // salvage the eaten text instead of ending silent.
+            const eaten = (attempt.finalTagDiscardedText ?? "").trim();
+            if (eaten && eaten !== SILENT_REPLY_TOKEN) {
+              finalTagSalvagePayloads = [{ text: eaten }];
+              log.warn(
+                `[final-tag] retry exhausted and reply eaten again: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                  `(chars=${eaten.length})`,
+              );
+            }
+          }
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
             payloadCount,
@@ -4127,7 +4173,7 @@ async function runEmbeddedAgentInternal(
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} attempts=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} — surfacing incomplete-turn error`,
             );
           }
-          if (incompleteTurnText) {
+          if (incompleteTurnText && !finalTagSalvagePayloads) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
               payloadCount,
@@ -4254,9 +4300,11 @@ async function runEmbeddedAgentInternal(
             : attempt.yieldDetected
               ? "end_turn"
               : (attemptAssistant?.stopReason as string | undefined);
-          const terminalPayloads = emptyAssistantReplyIsSilent
-            ? [{ text: SILENT_REPLY_TOKEN }]
-            : payloadsForTerminalPath;
+          const terminalPayloads = finalTagSalvagePayloads
+            ? finalTagSalvagePayloads
+            : emptyAssistantReplyIsSilent
+              ? [{ text: SILENT_REPLY_TOKEN }]
+              : payloadsForTerminalPath;
           setTerminalLifecycleMeta({
             replayInvalid,
             livenessState,

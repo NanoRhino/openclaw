@@ -223,6 +223,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     livenessState: "working",
     hadDeterministicSideEffect: false,
     pendingEventChain: null,
+    finalTagDiscardedEntireReply: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
@@ -1393,6 +1394,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }
     },
     unsubscribe,
+    wasFinalTagEntireReplyDiscarded: () => state.finalTagDiscardedEntireReply === true,
+    getFinalTagDiscardedText: () => state.finalTagDiscardedText,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;
