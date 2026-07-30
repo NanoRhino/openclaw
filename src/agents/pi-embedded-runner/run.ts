@@ -1972,6 +1972,20 @@ export async function runEmbeddedPiAgent(
                 `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
                 `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
             );
+          } else if (nextFinalTagDiscardRetryPlan && !finalTagSalvagePayloads) {
+            // The one wrap-in-<final> retry was already spent and the retried
+            // reply STILL came back untagged and got eaten. Last resort:
+            // salvage the eaten text instead of ending silent — the filter
+            // screens it on the deliver path. Default-deliver-over-silence.
+            const eaten = (attempt.finalTagDiscardedText ?? "").trim();
+            if (eaten && eaten !== SILENT_REPLY_TOKEN) {
+              finalTagSalvagePayloads = [{ text: eaten }];
+              log.warn(
+                `[final-tag] retry exhausted and reply eaten again: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                  `(chars=${eaten.length})`,
+              );
+            }
           }
           if (
             nextPlanningOnlyRetryInstruction &&
