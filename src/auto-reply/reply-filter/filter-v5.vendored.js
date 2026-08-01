@@ -2,7 +2,21 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 13;
+const _REPLY_FILTER_HEADER_VERSION = 14;
+// v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
+// runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
+// "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
+// The Sonnet main line invents no-op tool calls (noop.txt / /dev/null /
+// dummy.txt / empty edits) between finishing real work and composing the
+// <final> reply; the calls fail, and resolveToolErrorWarningPolicy echoed
+// mutating-tool failures to the channel unconditionally. The EMITTER is fixed
+// (messages.suppressToolErrors=true honored before the mutating branch,
+// 021b5b257f3); this rule is the deterministic second belt so no ⚠️-prefixed
+// tool-failure echo of any shape ever reaches a user again, whatever path
+// produces it. Corpus-validated 2026-08-01 against all 28,911 delivered
+// messages: matches exactly the 13 known harness leaks, zero coach-authored
+// hits; the 147 other ⚠️-prefixed lines (error notices like "Something went
+// wrong…", which carry no "failed") are untouched.
 // v12 (2026-07-17, agent 050304 incident): a medical safety referral was
 // silently killed by the Bedrock Haiku classifier. The delivered coach reply
 // (user asking on a friend's behalf about severe muscle cramps after heavy
@@ -294,6 +308,11 @@ const _RF_GERUND_INTERNAL = new RegExp(
   "i",
 );
 function _fastReject(p) {
+  // v14: harness tool-failure echo ("⚠️ 📝 Edit: in /tmp/noop.txt failed",
+  // "⚠️ ✍️ Write: to /dev/null failed") — never user content. Line-anchored
+  // AND requires the "failed" verb, so error notices without it ("⚠️
+  // Something went wrong…") and any coach-authored ⚠️ line pass untouched.
+  if (/^[ \t]*⚠️[^\n]{0,200}\bfailed\b/i.test(p)) return true;
   // Machine output as final text: memory-consolidation crons end their turn
   // with a raw JSON object ('{"tasks_completed": …}' — 13 composed in 48h on
   // 2026-07-09/10). No legitimate SMS starts with a JSON bracket.
