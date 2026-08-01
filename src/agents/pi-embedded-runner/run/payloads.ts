@@ -104,13 +104,20 @@ function resolveToolErrorWarningPolicy(params: {
   if (normalizedToolName === "sessions_send") {
     return { showWarning: false, includeDetails };
   }
+  // nanorhino: messages.suppressToolErrors silences EVERY tool-error warning,
+  // mutating tools included. Upstream keeps mutating failures visible because a
+  // dev user asked for that edit and must know it didn't land; on a coaching
+  // channel every tool call is internal, and "⚠️ 📝 Edit: in /tmp/noop.txt
+  // failed" reached a real SMS user (2026-08-01, agent 050171 — the model
+  // invented a no-op edit under the wrap-in-<final> steer and its failure was
+  // texted to her). Default (key unset) behavior is unchanged.
+  if (params.suppressToolErrors) {
+    return { showWarning: false, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
     return { showWarning: true, includeDetails };
-  }
-  if (params.suppressToolErrors) {
-    return { showWarning: false, includeDetails };
   }
   return {
     showWarning: !params.hasUserFacingReply && !isRecoverableToolError(params.lastToolError.error),
