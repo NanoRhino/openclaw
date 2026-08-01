@@ -11,6 +11,12 @@ const DEFAULT_MAX_TOKENS = 6000;
 
 type VisibleMessage = { role: "user" | "assistant"; text: string };
 
+function sanitizeVisibleUserText(text: string): string {
+  const stripped = stripInboundMetadata(text).trim();
+  const wrapped = stripped.match(/^User text:\s*\n?([\s\S]*?)(?:\nTranscript:\s*\n?[\s\S]*)?$/i);
+  return (wrapped?.[1] ?? stripped).trim();
+}
+
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -64,7 +70,7 @@ function parseVisibleMessage(line: string): VisibleMessage | undefined {
     : typeof candidate.content === "string"
       ? candidate.content
       : "";
-  const text = candidate.role === "user" ? stripInboundMetadata(raw).trim() : raw.trim();
+  const text = candidate.role === "user" ? sanitizeVisibleUserText(raw) : raw.trim();
   return text ? { role: candidate.role, text } : undefined;
 }
 
@@ -98,6 +104,10 @@ export async function buildRecentMainContext(params: {
   for await (const line of streamSessionTranscriptLinesReverse(transcript)) {
     const message = parseVisibleMessage(line);
     if (!message) {
+      continue;
+    }
+    const previous = newestFirst.at(-1);
+    if (previous?.role === message.role && previous.text === message.text) {
       continue;
     }
     const nextTokens = estimateTokens(`${message.role}: ${message.text}`);

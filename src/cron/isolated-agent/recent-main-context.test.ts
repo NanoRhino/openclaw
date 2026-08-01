@@ -76,4 +76,22 @@ describe("buildRecentMainContext", () => {
     expect(result).toContain("最新回复");
     expect(result).not.toContain("旧消息");
   });
+
+  it("keeps voice user text while dropping transcripts and adjacent duplicates", async () => {
+    const env = await fixture([
+      message("user", "User text:\n我早餐吃了一个鸡蛋。\nTranscript:\n我早餐吃了一個雞蛋。"),
+      message(
+        "user",
+        "User text:\n我早餐吃了一个鸡蛋。\nTranscript:\nEnglish translation: I ate an egg.",
+      ),
+      message("assistant", "记好了。"),
+    ]);
+
+    const result = await buildRecentMainContext({ agentId: "wechat-user", env });
+
+    expect(result).toContain("User: 我早餐吃了一个鸡蛋。");
+    expect(result?.match(/User: 我早餐吃了一个鸡蛋。/g)).toHaveLength(1);
+    expect(result).not.toContain("Transcript:");
+    expect(result).not.toContain("English translation");
+  });
 });
