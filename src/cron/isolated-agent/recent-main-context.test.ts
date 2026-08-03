@@ -37,8 +37,17 @@ async function fixture(lines: unknown[]) {
   return { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
 }
 
-function message(role: string, text: string, extra: Record<string, unknown> = {}) {
-  return { type: "message", message: { role, content: [{ type: "text", text }], ...extra } };
+function message(
+  role: string,
+  text: string,
+  extra: Record<string, unknown> = {},
+  timestamp = "2026-07-31T06:48:50.216Z",
+) {
+  return {
+    type: "message",
+    timestamp,
+    message: { role, content: [{ type: "text", text }], ...extra },
+  };
 }
 
 describe("buildRecentMainContext", () => {
@@ -55,11 +64,23 @@ describe("buildRecentMainContext", () => {
 
     const result = await buildRecentMainContext({ agentId: "wechat-user", env });
 
-    expect(result).toContain("User: 我一会饿了可以吃一小把松子吗");
-    expect(result).toContain("Assistant: 可以，控制在十几颗。");
+    expect(result).toContain("[2026-07-31T06:48:50.216Z] User: 我一会饿了可以吃一小把松子吗");
+    expect(result).toContain("[2026-07-31T06:48:50.216Z] Assistant: 可以，控制在十几颗。");
     expect(result).not.toContain("secret tool output");
     expect(result).not.toContain("duplicate");
     expect(result).not.toContain("Conversation info");
+  });
+
+  it("preserves each message timestamp independently", async () => {
+    const env = await fixture([
+      message("user", "昨天吃了薯片", {}, "2026-07-31T06:40:00.000Z"),
+      message("assistant", "当天累计超了120大卡。", {}, "2026-07-31T06:41:00.000Z"),
+    ]);
+
+    const result = await buildRecentMainContext({ agentId: "wechat-user", env });
+
+    expect(result).toContain("[2026-07-31T06:40:00.000Z] User: 昨天吃了薯片");
+    expect(result).toContain("[2026-07-31T06:41:00.000Z] Assistant: 当天累计超了120大卡。");
   });
 
   it("enforces the local token budget", async () => {

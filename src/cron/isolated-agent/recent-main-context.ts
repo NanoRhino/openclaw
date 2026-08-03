@@ -9,7 +9,7 @@ import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../utils/cjk-c
 const DEFAULT_TURNS = 10;
 const DEFAULT_MAX_TOKENS = 6000;
 
-type VisibleMessage = { role: "user" | "assistant"; text: string };
+type VisibleMessage = { role: "user" | "assistant"; text: string; timestamp?: string };
 
 function sanitizeVisibleUserText(text: string): string {
   const stripped = stripInboundMetadata(text).trim();
@@ -40,7 +40,8 @@ function parseVisibleMessage(line: string): VisibleMessage | undefined {
   if (!record || typeof record !== "object" || !("message" in record)) {
     return undefined;
   }
-  const message = (record as { message?: unknown }).message;
+  const envelope = record as { message?: unknown; timestamp?: unknown };
+  const message = envelope.message;
   if (!message || typeof message !== "object") {
     return undefined;
   }
@@ -49,6 +50,7 @@ function parseVisibleMessage(line: string): VisibleMessage | undefined {
     content?: unknown;
     provider?: unknown;
     model?: unknown;
+    timestamp?: unknown;
   };
   if (candidate.role !== "user" && candidate.role !== "assistant") {
     return undefined;
@@ -71,7 +73,18 @@ function parseVisibleMessage(line: string): VisibleMessage | undefined {
       ? candidate.content
       : "";
   const text = candidate.role === "user" ? sanitizeVisibleUserText(raw) : raw.trim();
-  return text ? { role: candidate.role, text } : undefined;
+  const rawTimestamp = envelope.timestamp ?? candidate.timestamp;
+  const parsedTimestamp =
+    typeof rawTimestamp === "number"
+      ? new Date(rawTimestamp)
+      : typeof rawTimestamp === "string"
+        ? new Date(rawTimestamp)
+        : undefined;
+  const timestamp =
+    parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime())
+      ? parsedTimestamp.toISOString()
+      : undefined;
+  return text ? { role: candidate.role, text, timestamp } : undefined;
 }
 
 function estimateTokens(text: string): number {
@@ -110,7 +123,8 @@ export async function buildRecentMainContext(params: {
     if (previous?.role === message.role && previous.text === message.text) {
       continue;
     }
-    const nextTokens = estimateTokens(`${message.role}: ${message.text}`);
+    const timestampPrefix = message.timestamp ? `[${message.timestamp}] ` : "";
+    const nextTokens = estimateTokens(`${timestampPrefix}${message.role}: ${message.text}`);
     if (tokens + nextTokens > maxTokens) {
       break;
     }
@@ -128,7 +142,8 @@ export async function buildRecentMainContext(params: {
   }
   const lines = newestFirst.reverse().map((message) => {
     const label = message.role === "user" ? "User" : "Assistant";
-    return `${label}: ${message.text}`;
+    const timestampPrefix = message.timestamp ? `[${message.timestamp}] ` : "";
+    return `${timestampPrefix}${label}: ${message.text}`;
   });
   return `<recent_main_context>\n${lines.join("\n")}\n</recent_main_context>`;
 }
