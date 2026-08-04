@@ -89,14 +89,28 @@ OpenClaw keeps short in-process caches for:
 - discovery results
 - manifest registry data
 - loaded plugin registries
+- parsed manifest files
 
 These caches reduce bursty startup and repeated command overhead. They are safe
 to think of as short-lived performance caches, not persistence.
 
+The parsed-manifest cache is the exception to "short-lived": it holds one
+deep-frozen parse product per manifest file, keyed by the stat of the verified
+file descriptor (device, inode, size, mtime, ctime). Editing or replacing a
+manifest invalidates its entry on the next load. Because a manifest is parsed
+once per file instead of once per workspace registry build, hosts running many
+agent workspaces stop paying repeated JSON5 parse cost and stop retaining one
+copy of every parse product per workspace. Manifests handed out from this cache
+are frozen, so consumers must treat manifest metadata as read-only and copy
+before modifying.
+
 Performance note:
 
 - Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
-  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
+  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable the discovery and
+  registry caches.
+- Set `OPENCLAW_DISABLE_MANIFEST_PARSE_CACHE=1` to parse every manifest on every
+  load (pre-cache behavior, unfrozen results).
 - Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
   `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
 

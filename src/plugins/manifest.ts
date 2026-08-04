@@ -26,6 +26,11 @@ import {
   normalizeManifestCommandAliases,
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
+import {
+  readManifestParseCache,
+  resolveManifestParseCacheIdentity,
+  writeManifestParseCache,
+} from "./manifest-parse-cache.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
@@ -878,6 +883,16 @@ export function loadPluginManifest(
       }),
     });
   }
+  // Parsed manifests are immutable metadata: share one frozen copy per file
+  // identity instead of re-parsing per workspace registry build.
+  const cacheIdentity = resolveManifestParseCacheIdentity(opened.stat);
+  if (cacheIdentity) {
+    const cached = readManifestParseCache<PluginManifestLoadResult>(manifestPath, cacheIdentity);
+    if (cached) {
+      fs.closeSync(opened.fd);
+      return cached;
+    }
+  }
   let raw: unknown;
   try {
     raw = JSON5.parse(fs.readFileSync(opened.fd, "utf-8"));
@@ -943,7 +958,7 @@ export function loadPluginManifest(
     uiHints = raw.uiHints as Record<string, PluginConfigUiHint>;
   }
 
-  return {
+  const result: PluginManifestLoadResult = {
     ok: true,
     manifest: {
       id,
@@ -983,6 +998,7 @@ export function loadPluginManifest(
     },
     manifestPath,
   };
+  return cacheIdentity ? writeManifestParseCache(manifestPath, cacheIdentity, result) : result;
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)

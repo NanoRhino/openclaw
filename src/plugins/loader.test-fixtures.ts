@@ -5,6 +5,7 @@ import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { withEnv } from "../test-utils/env.js";
 import { clearPluginDiscoveryCache } from "./discovery.js";
 import { clearPluginLoaderCache, loadOpenClawPlugins } from "./loader.js";
+import { clearPluginManifestParseCache } from "./manifest-parse-cache.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
@@ -141,6 +142,7 @@ export function resetPluginLoaderTestStateForTest() {
   clearPluginLoaderCache();
   clearPluginDiscoveryCache();
   clearPluginManifestRegistryCache();
+  clearPluginManifestParseCache();
   resetPluginRuntimeStateForTest();
   resetDiagnosticEventsForTest();
   if (prevBundledDir === undefined) {

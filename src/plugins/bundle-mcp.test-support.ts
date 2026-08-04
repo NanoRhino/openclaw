@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "../test-utils/env.js";
 import { clearPluginDiscoveryCache } from "./discovery.js";
+import { clearPluginManifestParseCache } from "./manifest-parse-cache.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 
 export function createBundleMcpTempHarness() {
@@ -17,6 +18,7 @@ export function createBundleMcpTempHarness() {
     async cleanup() {
       clearPluginDiscoveryCache();
       clearPluginManifestRegistryCache();
+      clearPluginManifestParseCache();
       await Promise.all(
         tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
       );
