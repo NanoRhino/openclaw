@@ -148,6 +148,7 @@ import {
   extractPlanningOnlyPlanDetails,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
+  resolveOnboardingTerminalToolReplyPayload,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
@@ -2598,11 +2599,18 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
-          const payloadsForTerminalPath = payloadsWithToolMedia?.length
-            ? payloadsWithToolMedia
-            : silentToolResultReplyPayload
-              ? [silentToolResultReplyPayload]
-              : payloadsWithToolMedia;
+          const onboardingTerminalToolReplyPayload = resolveOnboardingTerminalToolReplyPayload({
+            aborted,
+            timedOut,
+            attempt,
+          });
+          const payloadsForTerminalPath = onboardingTerminalToolReplyPayload
+            ? [onboardingTerminalToolReplyPayload]
+            : payloadsWithToolMedia?.length
+              ? payloadsWithToolMedia
+              : silentToolResultReplyPayload
+                ? [silentToolResultReplyPayload]
+                : payloadsWithToolMedia;
           const payloadCount = payloadsForTerminalPath?.length ?? 0;
           const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
             allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
@@ -2611,28 +2619,30 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
-          const nextPlanningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolvePlanningOnlyRetryInstruction({
-                provider,
-                modelId,
-                executionContract,
-                prompt: params.prompt,
-                aborted,
-                timedOut,
-                attempt,
-              });
-          const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
-            ? null
-            : resolveReasoningOnlyRetryInstruction({
-                provider: activeErrorContext.provider,
-                modelId: activeErrorContext.model,
-                modelApi: effectiveModel.api,
-                executionContract,
-                aborted,
-                timedOut,
-                attempt,
-              });
+          const nextPlanningOnlyRetryInstruction =
+            emptyAssistantReplyIsSilent || onboardingTerminalToolReplyPayload
+              ? null
+              : resolvePlanningOnlyRetryInstruction({
+                  provider,
+                  modelId,
+                  executionContract,
+                  prompt: params.prompt,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
+          const nextReasoningOnlyRetryInstruction =
+            emptyAssistantReplyIsSilent || onboardingTerminalToolReplyPayload
+              ? null
+              : resolveReasoningOnlyRetryInstruction({
+                  provider: activeErrorContext.provider,
+                  modelId: activeErrorContext.model,
+                  modelApi: effectiveModel.api,
+                  executionContract,
+                  aborted,
+                  timedOut,
+                  attempt,
+                });
           const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveEmptyResponseRetryInstruction({
@@ -2716,14 +2726,16 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
-          const incompleteTurnText = emptyAssistantReplyIsSilent
-            ? null
-            : resolveIncompleteTurnPayloadText({
-                payloadCount,
-                aborted,
-                timedOut,
-                attempt,
-              });
+          const incompleteTurnText =
+            emptyAssistantReplyIsSilent || onboardingTerminalToolReplyPayload
+              ? null
+              : resolveIncompleteTurnPayloadText({
+                  payloadCount,
+                  aborted,
+                  timedOut,
+                  attempt,
+                  intentionalTerminalToolReply: Boolean(onboardingTerminalToolReplyPayload),
+                });
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&
@@ -3001,7 +3013,9 @@ export async function runEmbeddedPiAgent(
             ? "tool_calls"
             : attempt.yieldDetected
               ? "end_turn"
-              : (sessionLastAssistant?.stopReason as string | undefined);
+              : onboardingTerminalToolReplyPayload
+                ? "stop"
+                : (sessionLastAssistant?.stopReason as string | undefined);
           const terminalPayloads = emptyAssistantReplyIsSilent
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
@@ -3022,8 +3036,10 @@ export async function runEmbeddedPiAgent(
               aborted,
               systemPromptReport: attempt.systemPromptReport,
               finalPromptText: attempt.finalPromptText,
-              finalAssistantVisibleText,
-              finalAssistantRawText,
+              finalAssistantVisibleText:
+                onboardingTerminalToolReplyPayload?.text ?? finalAssistantVisibleText,
+              finalAssistantRawText:
+                onboardingTerminalToolReplyPayload?.text ?? finalAssistantRawText,
               replayInvalid,
               livenessState,
               agentHarnessResultClassification: attempt.agentHarnessResultClassification,

@@ -76,6 +76,11 @@ type SilentToolResultAttempt = Pick<
   | "toolMetas"
 >;
 
+const ONBOARDING_TERMINAL_REPLY_TOOL_NAME = "onboarding_profile_update_and_reply";
+const ONBOARDING_TERMINAL_REPLY_DETAILS_KIND = "openclaw.onboarding_terminal_reply";
+const ONBOARDING_TERMINAL_REPLY_DETAILS_VERSION = 1;
+const ONBOARDING_TERMINAL_REPLY_MAX_BYTES = 8 * 1024;
+
 type RunLivenessAttempt = Pick<
   EmbeddedRunAttemptResult,
   "lastAssistant" | "promptErrorSource" | "replayMetadata" | "timedOutDuringCompaction"
@@ -225,13 +230,16 @@ export function resolveIncompleteTurnPayloadText(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
+  intentionalTerminalToolReply?: boolean;
 }): string | null {
   // Tool-use terminal guard: when the last assistant message ended with a
   // tool-call stop reason, the model expected to continue after tool results.
   // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
-  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const toolUseTerminal =
+    params.attempt.lastAssistant?.stopReason === "toolUse" &&
+    params.intentionalTerminalToolReply !== true;
 
   if (
     (params.payloadCount !== 0 && !toolUseTerminal) ||
@@ -277,6 +285,102 @@ export function resolveIncompleteTurnPayloadText(params: {
   return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
+}
+
+export function resolveOnboardingTerminalToolReplyPayload(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: SilentToolResultAttempt;
+}): { text: string } | null {
+  const toolMetas = params.attempt.toolMetas ?? [];
+  if (
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    toolMetas.length !== 1 ||
+    toolMetas[0]?.toolName !== ONBOARDING_TERMINAL_REPLY_TOOL_NAME
+  ) {
+    return null;
+  }
+
+  const messages = params.attempt.messagesSnapshot;
+  const toolResult = messages.at(-1) as
+    | {
+        role?: unknown;
+        toolCallId?: unknown;
+        toolName?: unknown;
+        isError?: unknown;
+        details?: unknown;
+      }
+    | undefined;
+  const assistant = messages.at(-2) as
+    | {
+        role?: unknown;
+        stopReason?: unknown;
+        content?: unknown;
+      }
+    | undefined;
+  if (
+    normalizeLowercaseStringOrEmpty(toolResult?.role) !== "toolresult" ||
+    toolResult?.toolName !== ONBOARDING_TERMINAL_REPLY_TOOL_NAME ||
+    toolResult?.isError === true ||
+    typeof toolResult?.toolCallId !== "string" ||
+    assistant?.role !== "assistant" ||
+    assistant?.stopReason !== "toolUse" ||
+    !Array.isArray(assistant.content)
+  ) {
+    return null;
+  }
+
+  const assistantToolCalls = assistant.content.flatMap((block, index) => {
+    if (!block || typeof block !== "object") {
+      return [];
+    }
+    const record = block as Record<string, unknown>;
+    return record.type === "toolCall" ? [{ index, record }] : [];
+  });
+  const matchingCall =
+    assistantToolCalls.length === 1 &&
+    assistantToolCalls[0]?.record.id === toolResult.toolCallId &&
+    assistantToolCalls[0]?.record.name === ONBOARDING_TERMINAL_REPLY_TOOL_NAME;
+  if (!matchingCall || !toolResult.details || typeof toolResult.details !== "object") {
+    return null;
+  }
+
+  const terminalToolCallIndex = assistantToolCalls[0]?.index ?? -1;
+  const hasVisibleTextAfterToolCall = assistant.content
+    .slice(terminalToolCallIndex + 1)
+    .some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const record = block as Record<string, unknown>;
+      return (
+        record.type === "text" && typeof record.text === "string" && record.text.trim().length > 0
+      );
+    });
+  if (hasVisibleTextAfterToolCall) {
+    return null;
+  }
+
+  const details = toolResult.details as Record<string, unknown>;
+  const replyText = typeof details.replyText === "string" ? details.replyText.trim() : "";
+  if (
+    details.kind !== ONBOARDING_TERMINAL_REPLY_DETAILS_KIND ||
+    details.version !== ONBOARDING_TERMINAL_REPLY_DETAILS_VERSION ||
+    !replyText ||
+    replyText.includes("\u0000") ||
+    Buffer.byteLength(replyText, "utf8") > ONBOARDING_TERMINAL_REPLY_MAX_BYTES
+  ) {
+    return null;
+  }
+
+  // patch-035-onboarding-terminal-reply: a validated terminal tool result is
+  // authoritative and replaces any preliminary text emitted before the call.
+  return { text: replyText };
 }
 
 function joinAssistantTexts(assistantTexts?: readonly string[]): string {

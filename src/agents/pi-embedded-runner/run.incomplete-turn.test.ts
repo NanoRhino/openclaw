@@ -28,6 +28,7 @@ import {
   resolvePlanningOnlyRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText,
+  resolveOnboardingTerminalToolReplyPayload,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -176,6 +177,106 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     });
 
     expect(payload).toBeNull();
+  });
+
+  it("uses a validated onboarding terminal tool reply as the authoritative payload", () => {
+    const payload = resolveOnboardingTerminalToolReplyPayload({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["我先记一下。"],
+        toolMetas: [{ toolName: "onboarding_profile_update_and_reply" }],
+        messagesSnapshot: [
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              { type: "text", text: "我先记一下。" },
+              {
+                type: "toolCall",
+                id: "call-onboarding-1",
+                name: "onboarding_profile_update_and_reply",
+                arguments: {},
+              },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "toolResult",
+            toolCallId: "call-onboarding-1",
+            toolName: "onboarding_profile_update_and_reply",
+            content: [{ type: "text", text: "stored" }],
+            details: {
+              kind: "openclaw.onboarding_terminal_reply",
+              version: 1,
+              replyText: "萌萌你好，我们继续下一步。",
+            },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toEqual({ text: "萌萌你好，我们继续下一步。" });
+  });
+
+  it("rejects an onboarding terminal result when visible text follows the tool call", () => {
+    const payload = resolveOnboardingTerminalToolReplyPayload({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["这个文本不能被覆盖。"],
+        toolMetas: [{ toolName: "onboarding_profile_update_and_reply" }],
+        messagesSnapshot: [
+          {
+            role: "assistant",
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-onboarding-2",
+                name: "onboarding_profile_update_and_reply",
+                arguments: {},
+              },
+              { type: "text", text: "这个文本不能被覆盖。" },
+            ],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "toolResult",
+            toolCallId: "call-onboarding-2",
+            toolName: "onboarding_profile_update_and_reply",
+            content: [{ type: "text", text: "stored" }],
+            details: {
+              kind: "openclaw.onboarding_terminal_reply",
+              version: 1,
+              replyText: "不能采用这条回复。",
+            },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+      }),
+    });
+
+    expect(payload).toBeNull();
+  });
+
+  it("does not classify an intentional onboarding terminal reply as incomplete", () => {
+    const incomplete = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      intentionalTerminalToolReply: true,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "onboarding_profile_update_and_reply" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "mock-1",
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incomplete).toBeNull();
   });
 
   it("treats exact NO_REPLY tool output as a quiet cron success when the final assistant is empty", async () => {
