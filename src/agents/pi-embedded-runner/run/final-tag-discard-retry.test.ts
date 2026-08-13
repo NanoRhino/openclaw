@@ -131,6 +131,52 @@ describe("resolveFinalTagDiscardRetryInstruction", () => {
     ).toBeNull();
   });
 
+  it("salvages a tool-loop turn that discarded SEVERAL messages (one sentinel each)", () => {
+    // 2026-08-13 incident (050273): preamble message discarded (92 chars),
+    // tools ran (meal + exercise saved), answer message discarded (671-char
+    // breakfast card). assistantTexts held TWO sentinels — the old
+    // single-token comparison saw "NO_REPLY\n\nNO_REPLY", concluded real text
+    // survived, and the member got pure silence for a live meal log. The
+    // salvage payload must be the LAST discarded message (the answer), never
+    // the internal-monologue preamble.
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        assistantTexts: ["NO_REPLY", "NO_REPLY"],
+        replayMetadata: { hadPotentialSideEffects: true },
+        finalTagDiscardedText: "📝 Breakfast logged! 671 kcal — nice protein start.",
+      }),
+    });
+    expect(plan?.kind).toBe("salvage");
+    if (plan?.kind === "salvage") {
+      expect(plan.text).toBe("📝 Breakfast logged! 671 kcal — nice protein start.");
+    }
+  });
+
+  it("retries a multi-discard turn with no side effects", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        assistantTexts: ["NO_REPLY", "NO_REPLY", "NO_REPLY"],
+      }),
+    });
+    expect(plan?.kind).toBe("retry");
+  });
+
+  it("still stands down when real text survived among the sentinels", () => {
+    expect(
+      resolveFinalTagDiscardRetryInstruction({
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttempt({
+          assistantTexts: ["NO_REPLY", "Here is your summary.", "NO_REPLY"],
+        }),
+      }),
+    ).toBeNull();
+  });
+
   it("does not fire on aborted or timed-out turns", () => {
     expect(
       resolveFinalTagDiscardRetryInstruction({

@@ -396,10 +396,21 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
   if (params.attempt.didSendViaMessagingTool) {
     return null;
   }
-  // Only when nothing user-visible survived: the restored silent sentinel (or
-  // nothing at all) is the whole visible outcome.
-  const visible = params.attempt.assistantTexts.join("\n\n").trim();
-  if (visible && visible !== SILENT_REPLY_TOKEN) {
+  // Only when nothing user-visible survived. Every discarded assistant message
+  // is restored as its own silent sentinel, and a tool-loop turn can discard
+  // SEVERAL messages in one attempt (preamble → tools → answer; 2026-08-13
+  // incident, agent 050273: two sentinels joined to "NO_REPLY\n\nNO_REPLY",
+  // failed the single-token comparison below, and the member got pure silence
+  // for a live meal log). Filter sentinels out instead of comparing the join
+  // against one token — recovery must only stand down when REAL text survived.
+  const visible = params.attempt.assistantTexts
+    .filter((text) => {
+      const trimmed = text.trim();
+      return trimmed.length > 0 && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    })
+    .join("\n\n")
+    .trim();
+  if (visible) {
     return null;
   }
   if (params.attempt.replayMetadata.hadPotentialSideEffects) {
