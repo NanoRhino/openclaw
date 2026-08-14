@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 14;
+const _REPLY_FILTER_HEADER_VERSION = 15;
 // v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
 // runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
 // "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
@@ -17,6 +17,21 @@ const _REPLY_FILTER_HEADER_VERSION = 14;
 // messages: matches exactly the 13 known harness leaks, zero coach-authored
 // hits; the 147 other ⚠️-prefixed lines (error notices like "Something went
 // wrong…", which carry no "failed") are untouched.
+// v15 (2026-08-14, billing-pilot activation notice): the paragraph "Three
+// promises: only new lows bill · the same pound never bills twice (regain +
+// re-lose = free) · plateaus cost nothing." was killed by the classifier on
+// agent 050171's activation notice (679→557 chars, y:llm) — a terse
+// middot-separated list with no you/your/emoji/nutrition vocab reads as
+// internal metadata. With results billing live, MONEY talk (bills, receipts,
+// pay links, the pricing terms) is user-facing by construction and must never
+// be silently dropped — a user who never sees their bill is strictly worse
+// than a rare narration leak. Fix mirrors v12: `_RF_BILLING` is a first-class
+// user-facing CLEAN SIGNAL — dollar amounts ($10/lb, $68, $500), "never
+// bills twice", billing/billed/invoice vocab (en + zh 计费/账单/免单/封顶),
+// and first-party pay/pricing URLs. Hard marks still override (the AND in
+// _rfGateSkipLLM is unchanged), so "invoice_created, now mark it sent"
+// narration keeps filtering. Second belt: classifier prompt gains a
+// billing-terms keep example.
 // v12 (2026-07-17, agent 050304 incident): a medical safety referral was
 // silently killed by the Bedrock Haiku classifier. The delivered coach reply
 // (user asking on a friend's behalf about severe muscle cramps after heavy
@@ -550,6 +565,7 @@ false (keep) — text written TO the member, in any language:
 - meal/weight confirmations ("📝 Lunch logged!…", "✏️ Updated: …", "Logged ✓ 136 lb")
 - day summaries ("📊 So far today: …"), coaching, encouragement, reminders, questions
 - medical safety guidance / referrals TO the member: "that's worth an actual doctor visit", "see your doctor", "talk to your doctor about it", "go to the ER if it worsens", "worth getting that checked out" — ALWAYS keep; a health coach must never drop a see-a-doctor referral
+- billing/pricing terms TO the member: "Three promises: only new lows bill · the same pound never bills twice (regain + re-lose = free) · plateaus cost nothing.", "$10/lb, capped at $500 lifetime", "6 lbs → $60 · tap to pay", receipts, pay links — ALWAYS keep; a member must never miss money talk
 - greetings, tips, anything with a nanorhino link
 
 """
@@ -781,8 +797,31 @@ const _RF_MEDICAL_REFERRAL = new RegExp(
   ].join("|"),
   "i",
 );
+// ── v15 billing / money-talk signal (a user-facing CLEAN SIGNAL) ──
+// Results billing (pilot 2026-08) makes money talk part of the coach's voice:
+// activation notices, settlement lines, receipts, pay links. A silently
+// dropped bill or billing term is a trust/consent failure, so explicit money
+// language skips the classifier — ONLY when the paragraph also carries no
+// internal hard mark (same AND as v12; billing narration with snake_case /
+// "Now mark…" still filters). Narrow by design: a bare "pay"/"charge" does
+// NOT qualify; triggers are dollar amounts, the never-bills-twice promise,
+// billing vocab, and first-party pay/pricing URLs.
+const _RF_BILLING = new RegExp(
+  [
+    "\\$\\s?\\d", // $10/lb, $68, $500 — any dollar figure
+    "\\bnever bills? twice\\b",
+    "\\bbill(?:ing|ed)\\b",
+    "\\binvoice\\b",
+    "\\bnanorhino\\.com\\/(?:pay|pricing)\\b",
+    "(?:计费|账单|免单|封顶|不二收)",
+  ].join("|"),
+  "iu",
+);
 function _rfGateSkipLLM(p) {
-  return (_RF_CLEAN_SIG.test(p) || _RF_MEDICAL_REFERRAL.test(p)) && !_RF_HARD_MARK.test(p);
+  return (
+    (_RF_CLEAN_SIG.test(p) || _RF_MEDICAL_REFERRAL.test(p) || _RF_BILLING.test(p)) &&
+    !_RF_HARD_MARK.test(p)
+  );
 }
 // ── v8 decision telemetry (fire-and-forget JSONL) ──
 // One line per filtered reply → ~/.openclaw/logs/reply-filter-decisions.jsonl.
