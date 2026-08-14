@@ -116,6 +116,76 @@ describe("filterReplyText fail-safe (patch-003)", () => {
   });
 });
 
+describe("filterReplyText meal-card basename sanitizer", () => {
+  const cardPath =
+    "/home/nanorhino/backend-service/.openclaw-gateway/workspace-wechat-dm-acc123/data/meal-cards/2026-08-14/201800-dinner.png";
+
+  it("strips a matching generated card basename glued to the final paragraph", async () => {
+    const result = await filterReplyText(
+      "今天收工，明天继续 💪201800-dinner.png",
+      undefined,
+      NON_EXCLUDED_SESSION_KEY,
+      { mediaUrls: [cardPath] },
+    );
+
+    expect(result.drop).toBe(false);
+    expect(result.text).toBe("今天收工，明天继续 💪");
+  });
+
+  it("strips a matching basename on its own trailing line", async () => {
+    const result = await filterReplyText(
+      "早餐记好了 ✅\n\n073415-breakfast.png\n",
+      undefined,
+      NON_EXCLUDED_SESSION_KEY,
+      { mediaUrls: [cardPath.replace("201800-dinner.png", "073415-breakfast.png")] },
+    );
+
+    expect(result.drop).toBe(false);
+    expect(result.text).toBe("早餐记好了 ✅");
+  });
+
+  it("accepts a file URL carrying the generated meal-card path", async () => {
+    const result = await filterReplyText(
+      "记好了～201800-dinner.png",
+      undefined,
+      NON_EXCLUDED_SESSION_KEY,
+      { mediaUrls: [`file://${cardPath}`] },
+    );
+
+    expect(result.text).toBe("记好了～");
+  });
+
+  it("preserves the filename when there is no matching attachment", async () => {
+    const text = "请查看201800-dinner.png";
+    const result = await filterReplyText(text, undefined, NON_EXCLUDED_SESSION_KEY, {
+      mediaUrls: [cardPath.replace("201800-dinner.png", "201801-dinner.png")],
+    });
+
+    expect(result.text).toBe(text);
+  });
+
+  it("preserves the filename for non-meal-card media", async () => {
+    const text = "请查看201800-dinner.png";
+    const result = await filterReplyText(text, undefined, NON_EXCLUDED_SESSION_KEY, {
+      mediaUrls: ["/tmp/201800-dinner.png"],
+    });
+
+    expect(result.text).toBe(text);
+  });
+
+  it("runs before reply-filter exclusions", async () => {
+    const result = await filterReplyText(
+      "今天收工201800-dinner.png",
+      undefined,
+      "agent:strategic-management:wecom:direct:fuzhuoran",
+      { mediaUrls: [cardPath] },
+    );
+
+    expect(result.drop).toBe(false);
+    expect(result.text).toBe("今天收工");
+  });
+});
+
 // === v6 LLM verdict parsing tests (patch-005) ===
 //
 // Regression coverage for the patch-004 failure mode: max_tokens=1 +

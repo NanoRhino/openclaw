@@ -312,10 +312,19 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
               deliverPayload.text,
               params.cfg,
               finalized.SessionKey,
+              {
+                mediaUrls: [deliverPayload.mediaUrl, ...(deliverPayload.mediaUrls ?? [])],
+              },
             );
             if (_fr.drop) return null;
             deliverPayload = { ...deliverPayload, text: _fr.text };
-            if (!deliverPayload.text?.trim()) return null;
+            if (
+              !deliverPayload.text?.trim() &&
+              !deliverPayload.mediaUrl &&
+              !deliverPayload.mediaUrls?.length
+            ) {
+              return null;
+            }
           }
           return deliverPayload;
         }

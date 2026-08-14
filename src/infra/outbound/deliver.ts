@@ -1437,7 +1437,9 @@ async function deliverOutboundPayloadsCore(
       const _entry = normalizedPayloads[_i];
       const _text = _entry?.payload?.text;
       if (_text) {
-        const _fr = await filterReplyText(_text, params.cfg, _rfKey);
+        const _fr = await filterReplyText(_text, params.cfg, _rfKey, {
+          mediaUrls: [_entry.payload.mediaUrl, ...(_entry.payload.mediaUrls ?? [])],
+        });
         if (_fr.drop) {
           normalizedPayloads.splice(_i, 1);
           continue;

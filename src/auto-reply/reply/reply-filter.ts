@@ -36,6 +36,52 @@ type ReplyFilterCfg = {
 
 type FilterResult = { drop: boolean; text: string };
 
+type ReplyFilterTextOptions = {
+  mediaUrls?: readonly (string | null | undefined)[];
+};
+
+const MEAL_CARD_MEDIA_RE =
+  /(?:^|\/)data\/meal-cards\/\d{4}-\d{2}-\d{2}\/(\d{6}-(?:breakfast|lunch|dinner|snack)\.png)(?:[?#].*)?$/i;
+
+function escapeReplyFilterRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Remove a generated meal-card basename that the model repeated at the very
+ * end of otherwise user-facing text. The attachment is the authority: a bare
+ * filename is removed only when the same payload carries the exact generated
+ * meal-card path, so ordinary mentions of PNG filenames remain untouched.
+ */
+export function stripTrailingMealCardBasename(
+  text: string,
+  mediaUrls: readonly (string | null | undefined)[] | undefined,
+): string {
+  if (!text || !mediaUrls?.length) {
+    return text;
+  }
+
+  const basenames = new Set<string>();
+  for (const mediaUrl of mediaUrls) {
+    if (typeof mediaUrl !== "string") {
+      continue;
+    }
+    const match = mediaUrl.trim().match(MEAL_CARD_MEDIA_RE);
+    if (match?.[1]) {
+      basenames.add(match[1]);
+    }
+  }
+
+  let sanitized = text;
+  for (const basename of basenames) {
+    const trailingBasename = new RegExp(`${escapeReplyFilterRegExp(basename)}\\s*$`, "i");
+    if (trailingBasename.test(sanitized)) {
+      sanitized = sanitized.replace(trailingBasename, "").trimEnd();
+    }
+  }
+  return sanitized;
+}
+
 let _replyFilterCfg: ReplyFilterCfg | null = null;
 let _replyFilterCfgMtime = 0;
 
@@ -388,10 +434,14 @@ export async function filterReplyText(
   text: string,
   _cfg: OpenClawConfig | undefined,
   sessionKey: string | undefined,
+  options: ReplyFilterTextOptions = {},
 ): Promise<FilterResult> {
   const t0 = Date.now();
   const filterCfg = _loadReplyFilterCfg();
-  const inputText = typeof text === "string" ? text : "";
+  const rawInputText = typeof text === "string" ? text : "";
+  const inputText = stripTrailingMealCardBasename(rawInputText, options.mediaUrls);
+  const strippedMealCardBasename = inputText !== rawInputText;
+  text = inputText;
   const inputLen = inputText.length;
   const traceLogEnabled = filterCfg?.traceLog !== false;
   const agentId = sessionKey?.split(":")?.[1];
@@ -429,6 +479,7 @@ export async function filterReplyText(
         outputText,
         inputLen,
         outputLen: outputText.length,
+        strippedMealCardBasename,
         paragraphCount,
         keptCount,
         droppedCount,
