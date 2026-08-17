@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 15;
+const _REPLY_FILTER_HEADER_VERSION = 16;
 // v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
 // runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
 // "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
@@ -423,6 +423,16 @@ function _fastReject(p) {
   // "Both tasks complete." / "Well under limit, no cleanup needed." (memory crons)
   if (/^(?:Both|All) tasks? complete\b/i.test(p)) return true;
   if (/\bno cleanup needed\b/i.test(p)) return true;
+  // v16 (2026-08-16 W33 leak): report-pipeline step narration — 13 delivered
+  // leaks like "Now run Step 5a (intake signal), skip 5b". Corpus-validated
+  // 0 FP over 61,363 delivered paragraphs (only other hits: three unnoticed
+  // 2026-07-26 W30-night leaks of the same class).
+  if (/^Now (?:run|re-?run|execute)\b/i.test(p)) return true;
+  if (/\b(?:run|re-?run|skip|need(?:ed)?|check) (?:Step )?\d+[ab]\b/i.test(p)) return true;
+  if (/\bStep \d+[ab]\b/i.test(p)) return true;
+  if (/\b(?:intake[- ]signal|weight[- ]lead)\b/i.test(p)) return true;
+  if (/^Gate says no\b/i.test(p)) return true;
+  if (/\b(?:no-weight (?:report|path|step)|weight-present path)\b/i.test(p)) return true;
   if (/^Everything (?:is |looks )?(?:confirmed|verified|correctly|within)/i.test(p)) return true;
   // "Now update the conclusion and follow-ups fields …" (imperative self-talk)
   if (
@@ -753,10 +763,15 @@ const _RF_HARD_MARK = new RegExp(
     "\\b(?:consolidat|rotat|compos|verbatim|sentinel|payload|classif)\\w*",
     "\\bmark(?:ing|ed)? (?:it |as |them )?sent\\b",
     "\\b(?:no cleanup needed|case-sensitiv\\w*|tasks? complete\\w*|restrictions? on file|no (?:notable )?restrictions)\\b",
-    "\\bNow (?:update|set|mark|build|create|write|read|pull|delete|add)\\b",
+    "\\bNow (?:update|set|mark|build|create|write|read|pull|delete|add|run|re-?run|execute|verify|check)\\b",
     "\\bLet me (?!know\\b)",
     "\\b(?:I need to|I should(?:n'?t)?|Now I|Now let)\\b",
     "\\b(?:no intervention needed|pending recalc|goal[- ]weight ask|goal ask|re-?deriv)\\w*",
+    // v16: pipeline step tokens / report internals are never user-facing
+    "\\bStep \\d+[ab]\\b",
+    "\\bskip \\d+[ab]\\b",
+    "\\b(?:intake[- ]signal|weight[- ]lead|no-weight (?:report|path|step)|weight-present path)\\b",
+    "\\bGate says no\\b",
     // generic snake_case (unbackticked internal vars like "Cal_safe is false");
     // on_track is whitelisted — it appears in the day-summary template itself.
     "\\b(?!on_track\\b)[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\\b",
