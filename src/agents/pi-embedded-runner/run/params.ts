@@ -54,6 +54,16 @@ export type RunEmbeddedPiAgentParams = {
   senderE164?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /**
+   * Whether the final-tag salvage path may deliver discarded text as the reply
+   * payload. Callers whose run has no delivery surface (cron jobs with
+   * delivery mode "none" — e.g. memory-consolidation) pass false: salvaged
+   * text on such runs goes nowhere, and resurrecting discarded narration is
+   * pure risk (2026-08-17 audit: 23 of 27 salvages in a 7h window were
+   * no-surface runs). Undefined/true keeps salvage active — the
+   * default-deliver-over-silence contract for runs that owe the user a reply.
+   */
+  finalTagSalvageEligible?: boolean;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */

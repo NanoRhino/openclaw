@@ -1949,6 +1949,14 @@ export async function runEmbeddedPiAgent(
             timedOut,
             attempt,
           });
+          // Salvage only serves runs that owe a delivery: on a no-surface run
+          // (cron delivery mode "none") the salvaged payload goes nowhere, so
+          // resurrecting discarded text is pure risk (W33 2026-08-16: recovery
+          // resurrected step narration into an announce leg; 2026-08-17 audit:
+          // 23/27 salvages in 7h were no-surface runs). Retry steering is NOT
+          // gated — a proper <final> rewrite is still the best outcome
+          // everywhere; only the deliver-the-eaten-text fallback is.
+          const finalTagSalvageEligible = params.finalTagSalvageEligible !== false;
           if (nextFinalTagDiscardRetryPlan && finalTagDiscardRetryAttempts < 1) {
             finalTagDiscardRetryAttempts += 1;
             if (nextFinalTagDiscardRetryPlan.kind === "retry") {
@@ -1961,17 +1969,25 @@ export async function runEmbeddedPiAgent(
               );
               continue;
             }
-            // Side-effect turn: no model re-run (a resubmission could repeat
-            // the completed mutation, and Bedrock rejects tool-bearing
-            // transcripts without toolConfig — 2026-07-30, .23/.24). Deliver
-            // the eaten text itself; the reply filter still screens it on the
-            // deliver path. Default-deliver-over-silence (Jason, 2026-07-30).
-            finalTagSalvagePayloads = [{ text: nextFinalTagDiscardRetryPlan.text }];
-            log.warn(
-              `[final-tag] entire reply discarded on a side-effect turn: runId=${params.runId} ` +
-                `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
-                `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
-            );
+            if (!finalTagSalvageEligible) {
+              log.warn(
+                `[final-tag] salvage skipped (no delivery surface): runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — discarded text stays discarded ` +
+                  `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
+              );
+            } else {
+              // Side-effect turn: no model re-run (a resubmission could repeat
+              // the completed mutation, and Bedrock rejects tool-bearing
+              // transcripts without toolConfig — 2026-07-30, .23/.24). Deliver
+              // the eaten text itself; the reply filter still screens it on the
+              // deliver path. Default-deliver-over-silence (Jason, 2026-07-30).
+              finalTagSalvagePayloads = [{ text: nextFinalTagDiscardRetryPlan.text }];
+              log.warn(
+                `[final-tag] entire reply discarded on a side-effect turn: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                  `(chars=${nextFinalTagDiscardRetryPlan.text.length})`,
+              );
+            }
           } else if (nextFinalTagDiscardRetryPlan && !finalTagSalvagePayloads) {
             // The one wrap-in-<final> retry was already spent and the retried
             // reply STILL came back untagged and got eaten. Last resort:
@@ -1979,12 +1995,20 @@ export async function runEmbeddedPiAgent(
             // screens it on the deliver path. Default-deliver-over-silence.
             const eaten = (attempt.finalTagDiscardedText ?? "").trim();
             if (eaten && eaten !== SILENT_REPLY_TOKEN) {
-              finalTagSalvagePayloads = [{ text: eaten }];
-              log.warn(
-                `[final-tag] retry exhausted and reply eaten again: runId=${params.runId} ` +
-                  `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
-                  `(chars=${eaten.length})`,
-              );
+              if (!finalTagSalvageEligible) {
+                log.warn(
+                  `[final-tag] salvage skipped (no delivery surface): runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} — retried reply eaten again, staying silent ` +
+                    `(chars=${eaten.length})`,
+                );
+              } else {
+                finalTagSalvagePayloads = [{ text: eaten }];
+                log.warn(
+                  `[final-tag] retry exhausted and reply eaten again: runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} — salvaging discarded text as the reply payload ` +
+                    `(chars=${eaten.length})`,
+                );
+              }
             }
           }
           if (

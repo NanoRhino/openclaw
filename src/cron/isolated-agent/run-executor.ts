@@ -70,6 +70,7 @@ export function createCronPromptExecutor(params: {
   timeoutMs: number;
   messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
+  deliveryRequested: boolean;
   resolvedDelivery: {
     accountId?: string;
     to?: string;
@@ -166,6 +167,7 @@ export function createCronPromptExecutor(params: {
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
+          finalTagSalvageEligible: params.deliveryRequested,
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,
@@ -253,6 +255,10 @@ export async function executeCronRun(params: {
     to?: string;
     threadId?: string | number;
   };
+  /** Whether this job's delivery plan will actually deliver the reply payload
+   * (announce/webhook). Gates the final-tag salvage fallback: a no-surface run
+   * must not resurrect discarded text. */
+  deliveryRequested: boolean;
   toolPolicy: {
     requireExplicitMessageTarget: boolean;
     disableMessageTool: boolean;
@@ -295,6 +301,7 @@ export async function executeCronRun(params: {
     timeoutMs: params.timeoutMs,
     messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
+    deliveryRequested: params.deliveryRequested,
     resolvedDelivery: params.resolvedDelivery,
     toolPolicy: params.toolPolicy,
     skillsSnapshot: params.skillsSnapshot,

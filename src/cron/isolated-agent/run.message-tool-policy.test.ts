@@ -242,6 +242,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       timeoutMs: 60_000,
       messageChannel: "messagechat",
       suppressExecNotifyOnExit: true,
+      deliveryRequested: true,
       toolPolicy: {
         requireExplicitMessageTarget: false,
         disableMessageTool: false,
