@@ -7,7 +7,7 @@
 
 import _replyFilterFs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { filterReplyText } from "./reply-filter.js";
+import { filterReplyText, stripTrailingMealCardBasename } from "./reply-filter.js";
 
 // A paragraph guaranteed to be killed by `_fastReject` (Let me ...)
 const INTERNAL_NARRATION = "Let me check the user's data first.";
@@ -155,22 +155,38 @@ describe("filterReplyText meal-card basename sanitizer", () => {
     expect(result.text).toBe("记好了～");
   });
 
-  it("preserves the filename when there is no matching attachment", async () => {
-    const text = "请查看201800-dinner.png";
-    const result = await filterReplyText(text, undefined, NON_EXCLUDED_SESSION_KEY, {
-      mediaUrls: [cardPath.replace("201800-dinner.png", "201801-dinner.png")],
-    });
+  // v2 (2026-08-19): the generated token is removed regardless of attachments —
+  // production showed mediaUrls is usually empty / re-hosted by the time the filter runs.
+  it("strips the generated basename even without a matching attachment", async () => {
+    const result = await filterReplyText(
+      "记好了，52 大卡小零嘴 🍇 全天 284，中午火锅空间充足～092118-snack.png",
+      undefined,
+      NON_EXCLUDED_SESSION_KEY,
+      {},
+    );
 
-    expect(result.text).toBe(text);
+    expect(result.text).toBe("记好了，52 大卡小零嘴 🍇 全天 284，中午火锅空间充足～");
   });
 
-  it("preserves the filename for non-meal-card media", async () => {
-    const text = "请查看201800-dinner.png";
-    const result = await filterReplyText(text, undefined, NON_EXCLUDED_SESSION_KEY, {
-      mediaUrls: ["/tmp/201800-dinner.png"],
-    });
+  it("strips a doubled basename and a mid-text full card path", async () => {
+    const result = await filterReplyText(
+      "确认一下好算准 🌱092941-breakfast.png092941-breakfast.png\n\n卡片在 " +
+        cardPath +
+        " 里\n\n再来一句",
+      undefined,
+      NON_EXCLUDED_SESSION_KEY,
+      { mediaUrls: [] },
+    );
 
-    expect(result.text).toBe(text);
+    expect(result.text).toBe("确认一下好算准 🌱\n\n卡片在  里\n\n再来一句");
+  });
+
+  it("leaves MEDIA: lines and ordinary text untouched (sanitizer unit)", () => {
+    const text = `MEDIA:${cardPath}\n[[order_media_first]]\n早餐记好了 ✅ 今天体重 65.3kg，早餐 330 大卡`;
+    expect(stripTrailingMealCardBasename(text, undefined)).toBe(text);
+    expect(stripTrailingMealCardBasename("正文。\n\n120817-lunch.png\n\n再来一句", [])).toBe(
+      "正文。\n\n再来一句",
+    );
   });
 
   it("runs before reply-filter exclusions", async () => {

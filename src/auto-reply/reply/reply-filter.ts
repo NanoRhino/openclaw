@@ -40,46 +40,53 @@ type ReplyFilterTextOptions = {
   mediaUrls?: readonly (string | null | undefined)[];
 };
 
-const MEAL_CARD_MEDIA_RE =
+export const MEAL_CARD_MEDIA_RE =
   /(?:^|\/)data\/meal-cards\/\d{4}-\d{2}-\d{2}\/(\d{6}-(?:breakfast|lunch|dinner|snack)\.png)(?:[?#].*)?$/i;
-
-function escapeReplyFilterRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+// Generated meal-card token: bare basename or full `…/data/meal-cards/YYYY-MM-DD/` path.
+// The name shape is ours (HHMMSS-{meal}.png) and never appears legitimately in user-facing
+// chat text, so it can be removed wherever it shows up.
+const MEAL_CARD_TOKEN_RE =
+  /(?:(?:[A-Za-z]:)?(?:\/[\w.\-]+)*\/data\/meal-cards\/\d{4}-\d{2}-\d{2}\/)?\d{6}-(?:breakfast|lunch|dinner|snack)\.png/gi;
 
 /**
- * Remove a generated meal-card basename that the model repeated at the very
- * end of otherwise user-facing text. The attachment is the authority: a bare
- * filename is removed only when the same payload carries the exact generated
- * meal-card path, so ordinary mentions of PNG filenames remain untouched.
+ * Remove generated meal-card filenames/paths that the model repeated inside
+ * otherwise user-facing text (2026-08-14 v1 only removed one trailing copy and
+ * only when the same payload still carried the local card path; in production
+ * the card is usually re-hosted or `mediaUrls` is empty by the time the filter
+ * runs, and the model sometimes writes the name twice, so v1 almost never fired).
+ *
+ * v2 (2026-08-19): every occurrence, anywhere in the text, independent of
+ * `mediaUrls`. `MEDIA:` lines are left untouched — they carry the real
+ * attachment path and are consumed before delivery. Leftover whitespace is
+ * tidied. `mediaUrls` is kept in the signature for call-site compatibility.
+ * Runtime backport for the 2026.5.12 dist: nanorhino-core patches/040.
  */
 export function stripTrailingMealCardBasename(
   text: string,
-  mediaUrls: readonly (string | null | undefined)[] | undefined,
+  _mediaUrls?: readonly (string | null | undefined)[] | undefined,
 ): string {
-  if (!text || !mediaUrls?.length) {
+  if (!text || typeof text !== "string") {
     return text;
   }
-
-  const basenames = new Set<string>();
-  for (const mediaUrl of mediaUrls) {
-    if (typeof mediaUrl !== "string") {
-      continue;
+  let changed = false;
+  const out = text.split("\n").map((line) => {
+    if (/^\s*MEDIA:/i.test(line)) {
+      return line;
     }
-    const match = mediaUrl.trim().match(MEAL_CARD_MEDIA_RE);
-    if (match?.[1]) {
-      basenames.add(match[1]);
+    const next = line.replace(MEAL_CARD_TOKEN_RE, "");
+    if (next !== line) {
+      changed = true;
     }
+    return next;
+  });
+  if (!changed) {
+    return text;
   }
-
-  let sanitized = text;
-  for (const basename of basenames) {
-    const trailingBasename = new RegExp(`${escapeReplyFilterRegExp(basename)}\\s*$`, "i");
-    if (trailingBasename.test(sanitized)) {
-      sanitized = sanitized.replace(trailingBasename, "").trimEnd();
-    }
-  }
-  return sanitized;
+  return out
+    .join("\n")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 }
 
 let _replyFilterCfg: ReplyFilterCfg | null = null;
