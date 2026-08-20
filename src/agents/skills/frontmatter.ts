@@ -194,8 +194,16 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const sessionsRaw = metadataObj.sessions;
+  const sessions = Array.isArray(sessionsRaw)
+    ? sessionsRaw
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => value.length > 0)
+    : undefined;
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
+    sessions: sessions && sessions.length > 0 ? sessions : undefined,
     emoji: readStringValue(metadataObj.emoji),
     homepage: readStringValue(metadataObj.homepage),
     skillKey: readStringValue(metadataObj.skillKey),

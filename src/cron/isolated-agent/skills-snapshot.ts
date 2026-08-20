@@ -38,6 +38,7 @@ export async function resolveCronSkillsSnapshot(params: {
   return runtime.buildWorkspaceSkillSnapshot(params.workspaceDir, {
     config: params.config,
     agentId: params.agentId,
+    sessionKind: "cron",
     skillFilter,
     eligibility: {
       remote: runtime.getRemoteSkillEligibility({

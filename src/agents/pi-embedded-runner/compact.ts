@@ -625,6 +625,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: effectiveSkillAgentId,
+      sessionKind: params.sessionKey?.includes(":cron:") ? "cron" : "chat",
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;

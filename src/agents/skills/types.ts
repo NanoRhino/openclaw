@@ -18,6 +18,12 @@ export type SkillInstallSpec = {
 
 export type OpenClawSkillMetadata = {
   always?: boolean;
+  /**
+   * Session kinds this skill may be surfaced to ("cron" = scheduled isolated
+   * sessions, "chat" = interactive sessions). Undeclared = visible to all
+   * (legacy default). Enforced when the prompt builder receives a sessionKind.
+   */
+  sessions?: string[];
   skillKey?: string;
   primaryEnv?: string;
   emoji?: string;

@@ -61,6 +61,7 @@ export async function resolveCommandsSystemPromptBundle(
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
         agentId: sessionAgentId,
+        sessionKind: params.sessionKey?.includes(":cron:") ? "cron" : "chat",
         eligibility: {
           remote: getRemoteSkillEligibility({
             advertiseExecNode: canExecRequestNode({

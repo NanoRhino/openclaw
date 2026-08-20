@@ -659,6 +659,7 @@ async function agentCommandInternal(
       ]);
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: cfg,
+        sessionKind: sessionKey?.includes(":cron:") ? "cron" : "chat",
         eligibility: {
           remote: getRemoteSkillEligibility({
             advertiseExecNode: canExecRequestNode({

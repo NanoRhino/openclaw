@@ -181,6 +181,7 @@ export async function ensureSkillSnapshot(params: {
     buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,
       agentId: sessionAgentId,
+      sessionKind: sessionKey?.includes(":cron:") ? "cron" : "chat",
       skillFilter,
       eligibility: { remote: remoteEligibility },
       snapshotVersion,

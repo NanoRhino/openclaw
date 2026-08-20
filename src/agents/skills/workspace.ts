@@ -977,8 +977,30 @@ type WorkspaceSkillBuildOptions = {
   agentId?: string;
   /** If provided, only include skills with these names */
   skillFilter?: string[];
+  /**
+   * Session kind the prompt is being built for. Skills whose frontmatter
+   * declares `metadata.openclaw.sessions` are only included when it lists
+   * this kind; undeclared skills are always included (legacy default).
+   */
+  sessionKind?: "cron" | "chat";
   eligibility?: SkillEligibilityContext;
 };
+
+/** Derive the session kind for skill scoping from a sessionKey. */
+export function sessionKindForSkills(sessionKey?: string): "cron" | "chat" {
+  return sessionKey && sessionKey.includes(":cron:") ? "cron" : "chat";
+}
+
+function matchesSessionKind(entry: SkillEntry, sessionKind?: "cron" | "chat"): boolean {
+  if (!sessionKind) {
+    return true;
+  }
+  const sessions = entry.metadata?.sessions;
+  if (!sessions || sessions.length === 0) {
+    return true;
+  }
+  return sessions.includes(sessionKind);
+}
 
 function resolveEffectiveWorkspaceSkillFilter(
   opts?: WorkspaceSkillBuildOptions,
@@ -1002,8 +1024,11 @@ function resolveWorkspaceSkillPromptState(
 } {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  const sessionEligible = skillEntries.filter((entry) =>
+    matchesSessionKind(entry, opts?.sessionKind),
+  );
   const eligible = filterSkillEntries(
-    skillEntries,
+    sessionEligible,
     opts?.config,
     effectiveSkillFilter,
     opts?.eligibility,
@@ -1044,6 +1069,9 @@ export function resolveSkillsPromptForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId?: string;
+  /** Session kind for `metadata.openclaw.sessions` scoping (entries path only;
+   *  snapshots are expected to have been built with the right kind already). */
+  sessionKind?: "cron" | "chat";
 }): string {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
   if (snapshotPrompt) {
@@ -1054,6 +1082,7 @@ export function resolveSkillsPromptForRun(params: {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
+      sessionKind: params.sessionKind,
     });
     return prompt.trim() ? prompt : "";
   }

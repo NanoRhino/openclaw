@@ -901,6 +901,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
+      sessionKind: params.sessionKey?.includes(":cron:") ? "cron" : "chat",
     });
     prepStages.mark("skills");
 
