@@ -117,7 +117,13 @@ export function buildMemoryFlushPlan(
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
-  const relativePath = `memory/${dateStamp}.md`;
+  // patch-044-memory-flush-path-env: 允许用环境变量指定 flush 写入文件（相对 workspace，
+  // 支持 YYYY-MM-DD 占位）。NanoRhino 配 memory/medium-term.md 让 flush 写进自己的记忆体系；
+  // 不配则维持默认 memory/<日期>.md。注意写工具是 append-only，别指向 JSON 文件。
+  const envFlushPath = String(process.env.OPENCLAW_MEMORY_FLUSH_RELATIVE_PATH ?? "").trim();
+  const relativePath = envFlushPath
+    ? envFlushPath.replaceAll("YYYY-MM-DD", dateStamp)
+    : `memory/${dateStamp}.md`;
 
   const promptBase = ensureNoReplyHint(
     ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
