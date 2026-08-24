@@ -139,8 +139,19 @@ export function buildMemoryFlushPlan(
     forceFlushTranscriptBytes,
     reserveTokensFloor,
     model: defaults?.model?.trim() || undefined,
-    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
-    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    // patch-045: 强制追加的安全 hint 写死 memory/YYYY-MM-DD.md，与自定义 relativePath 矛盾
+    // （模型两头听，写错路径持续发生）。让 hint 路径跟随 relativePath；默认时逐字等价。
+    prompt: appendCurrentTimeLine(
+      promptBase
+        .replaceAll("memory/YYYY-MM-DD.md", relativePath)
+        .replaceAll("YYYY-MM-DD.md", relativePath.split("/").pop() ?? `${dateStamp}.md`)
+        .replaceAll("YYYY-MM-DD", dateStamp),
+      timeLine,
+    ),
+    systemPrompt: systemPrompt
+      .replaceAll("memory/YYYY-MM-DD.md", relativePath)
+      .replaceAll("YYYY-MM-DD.md", relativePath.split("/").pop() ?? `${dateStamp}.md`)
+      .replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
   };
 }
