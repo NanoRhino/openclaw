@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { resolveUserTimezone } from "../../agents/date-time.js";
+import { resolveWorkspaceTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -128,13 +128,13 @@ export async function readPostCompactionContext(
     const displayNames = foundSectionNames.length > 0 ? foundSectionNames : sectionNames;
 
     const resolvedNowMs = effectiveNowMs ?? Date.now();
-    const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
+    const timezone = resolveWorkspaceTimezone(workspaceDir, cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
       resolveAgentContextLimits(cfg, agentId)?.postCompactionMaxChars ?? MAX_CONTEXT_CHARS;
     // Always append the real runtime timestamp — AGENTS.md content may itself contain
     // "Current time:" as user-authored text, so we must not gate on that substring.
-    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs);
+    const { timeLine } = resolveCronStyleNow(cfg ?? {}, resolvedNowMs, timezone);
 
     const combined = sections.join("\n\n").replaceAll("YYYY-MM-DD", dateStamp);
     const safeContent =

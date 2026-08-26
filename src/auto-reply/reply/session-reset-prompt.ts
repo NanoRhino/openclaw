@@ -4,6 +4,7 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "../../agents/bootstrap-prompt.js";
 import { appendCronStyleCurrentTimeLine } from "../../agents/current-time.js";
+import { resolveWorkspaceTimezone } from "../../agents/date-time.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -87,7 +88,12 @@ export async function resolveBareSessionResetPromptState(params: {
   });
   return {
     bootstrapMode,
-    prompt: buildBareSessionResetPrompt(params.cfg, params.nowMs, bootstrapMode),
+    prompt: buildBareSessionResetPrompt(
+      params.cfg,
+      params.nowMs,
+      bootstrapMode,
+      params.workspaceDir,
+    ),
     shouldPrependStartupContext: bootstrapMode === "none",
   };
 }
@@ -101,6 +107,7 @@ export function buildBareSessionResetPrompt(
   cfg?: OpenClawConfig,
   nowMs?: number,
   bootstrapMode?: BootstrapMode,
+  workspaceDir?: string,
 ): string {
   return appendCronStyleCurrentTimeLine(
     bootstrapMode === "full"
@@ -110,6 +117,7 @@ export function buildBareSessionResetPrompt(
         : BARE_SESSION_RESET_PROMPT_BASE,
     cfg ?? {},
     nowMs ?? Date.now(),
+    resolveWorkspaceTimezone(workspaceDir, cfg?.agents?.defaults?.userTimezone),
   );
 }
 

@@ -30,7 +30,38 @@ function findFreshestLocalDirectSession(
     .sort(([, left], [, right]) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))[0]?.[1];
 }
 
-function parseVisibleMessage(line: string): VisibleMessage | undefined {
+const WEEKDAY_ZH: Record<string, string> = {
+  Mon: "周一",
+  Tue: "周二",
+  Wed: "周三",
+  Thu: "周四",
+  Fri: "周五",
+  Sat: "周六",
+  Sun: "周日",
+};
+
+/** `2026-08-21 07:41 周五 Asia/Shanghai` — same clock as the cron prompt's Current time (UTC ISO made
+ *  everything before 08:00 Beijing look like "yesterday"). Falls back to ISO on any failure. */
+function formatLocalTimestamp(date: Date, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      weekday: "short",
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+    return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")} ${WEEKDAY_ZH[get("weekday")] ?? get("weekday")} ${timeZone}`;
+  } catch {
+    return date.toISOString();
+  }
+}
+
+function parseVisibleMessage(line: string, timeZone?: string): VisibleMessage | undefined {
   let record: unknown;
   try {
     record = JSON.parse(line);
@@ -82,7 +113,9 @@ function parseVisibleMessage(line: string): VisibleMessage | undefined {
         : undefined;
   const timestamp =
     parsedTimestamp && !Number.isNaN(parsedTimestamp.getTime())
-      ? parsedTimestamp.toISOString()
+      ? timeZone
+        ? formatLocalTimestamp(parsedTimestamp, timeZone)
+        : parsedTimestamp.toISOString()
       : undefined;
   return text ? { role: candidate.role, text, timestamp } : undefined;
 }
@@ -94,6 +127,8 @@ function estimateTokens(text: string): number {
 export async function buildRecentMainContext(params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  /** Render timestamps in this timezone (per-workspace); default keeps UTC ISO. */
+  timeZone?: string;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
   const turns = positiveInt(env.CRON_RECENT_TURNS, DEFAULT_TURNS);
@@ -115,7 +150,7 @@ export async function buildRecentMainContext(params: {
   let assistantTurns = 0;
   let tokens = 0;
   for await (const line of streamSessionTranscriptLinesReverse(transcript)) {
-    const message = parseVisibleMessage(line);
+    const message = parseVisibleMessage(line, params.timeZone);
     if (!message) {
       continue;
     }

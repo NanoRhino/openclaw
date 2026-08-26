@@ -1,4 +1,5 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { resolveWorkspaceTimezone } from "../../agents/date-time.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
@@ -683,7 +684,13 @@ async function prepareCronRunContext(params: {
       agentId,
     });
 
-  const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
+  // Per-workspace timezone (USER.md Timezone → TZ Offset → config/host) for the cron prompt's
+  // Current time and the recent-main-context timestamps (formerly dist patches 046/047).
+  const cronTimeZone = resolveWorkspaceTimezone(
+    workspaceDir,
+    input.cfg.agents?.defaults?.userTimezone,
+  );
+  const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now, cronTimeZone);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();
   const isExternalHook =
     hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
@@ -720,7 +727,7 @@ async function prepareCronRunContext(params: {
   }
   if (agentPayload?.recentMainContext) {
     try {
-      const recentMainContext = await buildRecentMainContext({ agentId });
+      const recentMainContext = await buildRecentMainContext({ agentId, timeZone: cronTimeZone });
       if (recentMainContext) {
         commandBody = `${commandBody}\n\n${recentMainContext}`;
       }

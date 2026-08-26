@@ -96,6 +96,8 @@ export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
     nowMs?: number;
+    /** Per-workspace timezone (USER.md); default = config/host. */
+    timeZone?: string;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
@@ -115,7 +117,7 @@ export function buildMemoryFlushPlan(
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
-  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs, resolved.timeZone);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
   // patch-044-memory-flush-path-env: 允许用环境变量指定 flush 写入文件（相对 workspace，
   // 支持 YYYY-MM-DD 占位）。NanoRhino 配 memory/medium-term.md 让 flush 写进自己的记忆体系；

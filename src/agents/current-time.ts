@@ -20,8 +20,13 @@ type TimeConfigLike = {
   };
 };
 
-export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronStyleNow {
-  const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+export function resolveCronStyleNow(
+  cfg: TimeConfigLike,
+  nowMs: number,
+  timeZoneOverride?: string,
+): CronStyleNow {
+  // timeZoneOverride: per-workspace timezone (USER.md) resolved by the caller; falls back to config/host.
+  const userTimezone = resolveUserTimezone(timeZoneOverride ?? cfg.agents?.defaults?.userTimezone);
   const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
   const formattedTime =
     formatUserTime(new Date(nowMs), userTimezone, userTimeFormat) ?? new Date(nowMs).toISOString();
@@ -30,11 +35,16 @@ export function resolveCronStyleNow(cfg: TimeConfigLike, nowMs: number): CronSty
   return { userTimezone, formattedTime, timeLine };
 }
 
-export function appendCronStyleCurrentTimeLine(text: string, cfg: TimeConfigLike, nowMs: number) {
+export function appendCronStyleCurrentTimeLine(
+  text: string,
+  cfg: TimeConfigLike,
+  nowMs: number,
+  timeZoneOverride?: string,
+) {
   const base = text.trimEnd();
   if (!base || base.includes("Current time:")) {
     return base;
   }
-  const { timeLine } = resolveCronStyleNow(cfg, nowMs);
+  const { timeLine } = resolveCronStyleNow(cfg, nowMs, timeZoneOverride);
   return `${base}\n${timeLine}`;
 }

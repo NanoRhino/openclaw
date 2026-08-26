@@ -1,4 +1,4 @@
-import { resolveUserTimezone } from "../agents/date-time.js";
+import { readWorkspaceTimezoneHint, resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,6 +41,8 @@ export type EnvelopeFormatOptions = {
    * Optional user timezone used when timezone="user".
    */
   userTimezone?: string;
+  /** Per-workspace timezone (USER.md); overrides "local"/"user" modes but not explicit utc/IANA config. */
+  workspaceTimezone?: string;
 };
 
 type NormalizedEnvelopeOptions = {
@@ -48,6 +50,7 @@ type NormalizedEnvelopeOptions = {
   includeTimestamp: boolean;
   includeElapsed: boolean;
   userTimezone?: string;
+  workspaceTimezone?: string;
 };
 
 type ResolvedEnvelopeTimezone =
@@ -66,13 +69,18 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
     .trim();
 }
 
-export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
+export function resolveEnvelopeFormatOptions(
+  cfg?: OpenClawConfig,
+  scope?: { workspaceDir?: string },
+): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  const workspaceTimezone = readWorkspaceTimezoneHint(scope?.workspaceDir);
   return {
     timezone: defaults?.envelopeTimezone,
     includeTimestamp: defaults?.envelopeTimestamp !== "off",
     includeElapsed: defaults?.envelopeElapsed !== "off",
     userTimezone: defaults?.userTimezone,
+    ...(workspaceTimezone ? { workspaceTimezone } : {}),
   };
 }
 
@@ -84,23 +92,26 @@ function normalizeEnvelopeOptions(options?: EnvelopeFormatOptions): NormalizedEn
     includeTimestamp,
     includeElapsed,
     userTimezone: options?.userTimezone,
+    workspaceTimezone: options?.workspaceTimezone,
   };
 }
 
 function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
   const trimmed = options.timezone?.trim();
-  if (!trimmed) {
+  const lowered = normalizeLowercaseStringOrEmpty(trimmed ?? "");
+  const perWorkspace = options.workspaceTimezone;
+  if (!trimmed || lowered === "local" || lowered === "host" || lowered === "user") {
+    // Per-workspace timezone (USER.md) wins over host/local and the global user timezone.
+    if (perWorkspace) {
+      return { mode: "iana", timeZone: perWorkspace };
+    }
+    if (lowered === "user") {
+      return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
+    }
     return { mode: "local" };
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
-  }
-  if (lowered === "local" || lowered === "host") {
-    return { mode: "local" };
-  }
-  if (lowered === "user") {
-    return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
   }
   const explicit = resolveTimezone(trimmed);
   return explicit ? { mode: "iana", timeZone: explicit } : { mode: "utc" };
