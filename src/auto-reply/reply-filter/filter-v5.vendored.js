@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 16;
+const _REPLY_FILTER_HEADER_VERSION = 17;
 // v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
 // runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
 // "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
@@ -419,6 +419,13 @@ function _fastReject(p) {
     return true;
   // Backticked snake_case identifiers are debug/code talk ("the bug is that `data_dir` ...")
   if (/`[a-z][a-z0-9]*(?:_[a-z0-9]+)+`/.test(p)) return true;
+  // ── v17: abandoned mid-draft self-correction delivered as SMS (2026-08-29,
+  // 060366): the model emitted a meal card that broke off in "…Fat 0.5g...
+  // wait", then a second corrected <final> — BOTH were delivered (the meal
+  // fast-accept let the dead draft skip the classifier). A paragraph that ENDS
+  // on an ellipsis + "wait" is an abandoned draft, never finished copy.
+  // Corpus-validated: exactly 1 hit in 38,854 delivered texts — the incident.
+  if (/(\.\.\.|…)\s*wait[.!?]?\s*$/i.test(p)) return true;
   // ── v8 additions: task-status + pre-compose narration (2026-07 corpus) ──
   // "Both tasks complete." / "Well under limit, no cleanup needed." (memory crons)
   if (/^(?:Both|All) tasks? complete\b/i.test(p)) return true;
