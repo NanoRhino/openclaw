@@ -848,3 +848,59 @@ describe("stripToolResultDetails", () => {
     expect(out).toBe(input);
   });
 });
+
+
+describe("sanitizeToolCallInputs thinking-only assistant turns", () => {
+  const thinking = { type: "thinking", thinking: "let me save this", thinkingSignature: "sig-1" };
+
+  it("drops an assistant turn that consists only of thinking blocks", () => {
+    const messages = castAgentMessages([
+      { role: "assistant", content: [thinking], stopReason: "toolUse", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolCallId: "tooluse_missing",
+        toolName: "exec",
+        content: [{ type: "text", text: "Tool exec not found" }],
+        timestamp: 2,
+      },
+      { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", timestamp: 3 },
+    ]);
+    const out = sanitizeToolCallInputs(messages);
+    expect(out.map((m) => m.role)).toEqual(["toolResult", "assistant"]);
+  });
+
+  it("drops the whole turn when stripping a disallowed tool call leaves only thinking", () => {
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          thinking,
+          { type: "toolCall", id: "tooluse_1", name: "exec", arguments: { command: "python3 x.py" } },
+        ],
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+    ]);
+    const out = sanitizeToolCallInputs(messages, { allowedToolNames: ["read", "write"] });
+    expect(out).toEqual([]);
+  });
+
+  it("keeps assistant turns that still carry text after stripping", () => {
+    const messages = castAgentMessages([
+      {
+        role: "assistant",
+        content: [
+          thinking,
+          { type: "text", text: "Now I have the details." },
+          { type: "toolCall", id: "tooluse_2", name: "exec", arguments: { command: "ls" } },
+        ],
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+    ]);
+    const out = sanitizeToolCallInputs(messages, { allowedToolNames: ["read", "write"] });
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content: Array<{ type: string }> }).content;
+    expect(content.map((b) => b.type)).toEqual(["thinking", "text"]);
+  });
+});
