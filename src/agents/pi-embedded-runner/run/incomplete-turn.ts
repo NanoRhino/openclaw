@@ -430,6 +430,140 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
   };
 }
 
+type PendingQuestionAttempt = Pick<
+  EmbeddedRunAttemptResult,
+  | "assistantTexts"
+  | "messagesSnapshot"
+  | "clientToolCall"
+  | "yieldDetected"
+  | "didSendDeterministicApprovalPrompt"
+  | "didSendViaMessagingTool"
+  | "messagingToolSentTexts"
+  | "messagingToolSentMediaUrls"
+  | "lastToolError"
+  | "replayMetadata"
+>;
+
+export const PENDING_QUESTION_SILENT_REPLY_RETRY_INSTRUCTION =
+  "Your previous message asked the user a direct question, and the user's latest message is their " +
+  "answer to it. NO_REPLY is not an acceptable way to receive an answer you asked for. Acknowledge " +
+  "their answer, apply any updates it calls for (plans, records, restrictions), and send a brief " +
+  "reply now.";
+
+function extractMessageVisibleText(message: { content?: unknown }): string {
+  const content = message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const candidate = block as { type?: unknown; text?: unknown };
+      return candidate.type === "text" && typeof candidate.text === "string" ? candidate.text : "";
+    })
+    .filter((text) => text.trim().length > 0)
+    .join("\n\n");
+}
+
+/**
+ * The assistant text that was last shown to the user BEFORE the current turn's
+ * prompt: walk the session snapshot backwards from the last user message,
+ * skipping user/toolResult entries and silent-sentinel assistant entries (a
+ * user may double-text into consecutive NO_REPLY turns without resolving the
+ * hanging question — 2026-08-28 incident shape).
+ */
+function findPriorAssistantVisibleText(
+  messages: ReadonlyArray<{ role?: unknown; content?: unknown }> | undefined,
+): string | null {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return null;
+  }
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  if (lastUserIndex <= 0) {
+    return null;
+  }
+  for (let i = lastUserIndex - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== "assistant") {
+      continue;
+    }
+    const text = extractMessageVisibleText(message).trim();
+    if (!text || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN)) {
+      continue;
+    }
+    return text;
+  }
+  return null;
+}
+
+/** "?" detection with URLs stripped so query strings don't read as questions. */
+function containsDirectQuestion(text: string): boolean {
+  return /\?/.test(text.replace(/https?:\/\/\S+/g, " "));
+}
+
+/**
+ * One-shot steer for a turn that answered the assistant's OWN question with
+ * silence. 2026-08-28 incident (openclaw-infra#165, agent 060334): the coach
+ * asked for the user's post-surgery medical clearance, the user answered
+ * "Resume as normal" 26 seconds later, and the model classified it as a
+ * closing ack and emitted a bare NO_REPLY — the answer was never acknowledged
+ * and the activity restriction never updated. Intentional silence stays
+ * by-design everywhere else: this only fires on direct-conversation user
+ * turns whose ONLY visible output is the silent sentinel, when the last
+ * delivered assistant text contains a direct question. Retry re-runs the
+ * model, so side-effect turns (completed mutations) never qualify — those
+ * already processed the answer and merely chose no confirmation.
+ */
+export function resolvePendingQuestionSilentReplyRetryInstruction(params: {
+  trigger?: string;
+  groupId?: string | null;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PendingQuestionAttempt;
+}): string | null {
+  if (params.trigger !== "user" || params.groupId) {
+    return null;
+  }
+  if (params.aborted || params.timedOut) {
+    return null;
+  }
+  const attempt = params.attempt;
+  if (
+    attempt.clientToolCall ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.didSendViaMessagingTool ||
+    attempt.lastToolError
+  ) {
+    return null;
+  }
+  if (hasCommittedUserVisibleToolDelivery(attempt)) {
+    return null;
+  }
+  if (attempt.replayMetadata.hadPotentialSideEffects) {
+    return null;
+  }
+  if (!hasOnlySilentAssistantReply(attempt.assistantTexts)) {
+    return null;
+  }
+  const priorText = findPriorAssistantVisibleText(attempt.messagesSnapshot);
+  if (!priorText || !containsDirectQuestion(priorText)) {
+    return null;
+  }
+  return PENDING_QUESTION_SILENT_REPLY_RETRY_INSTRUCTION;
+}
+
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;

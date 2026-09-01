@@ -118,6 +118,7 @@ import {
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
   resolveFinalTagDiscardRetryInstruction,
+  resolvePendingQuestionSilentReplyRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
@@ -604,6 +605,7 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let finalTagDiscardRetryAttempts = 0;
+      let pendingQuestionSilentReplyRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
@@ -2009,6 +2011,39 @@ export async function runEmbeddedPiAgent(
                     `(chars=${eaten.length})`,
                 );
               }
+            }
+          }
+          // Pending-question NO_REPLY guard (openclaw-infra#165, 2026-08-28,
+          // agent 060334): the model answered the user's reply to the
+          // assistant's OWN question with a bare NO_REPLY, so a coach-initiated
+          // medical-clearance answer was silently dropped for 14h. Intentional
+          // silence stays by-design; only this narrow shape gets one respond
+          // steer. Stands down whenever the final-tag path claimed the turn.
+          if (!nextFinalTagDiscardRetryPlan && !finalTagSalvagePayloads) {
+            const nextPendingQuestionSilentReplyInstruction =
+              resolvePendingQuestionSilentReplyRetryInstruction({
+                trigger: params.trigger,
+                groupId: params.groupId,
+                aborted,
+                timedOut,
+                attempt,
+              });
+            if (nextPendingQuestionSilentReplyInstruction) {
+              if (pendingQuestionSilentReplyRetryAttempts < 1) {
+                pendingQuestionSilentReplyRetryAttempts += 1;
+                // Ride the reasoning-only injection channel like the final-tag
+                // steer: the instruction shares the next-attempt prompt slot.
+                reasoningOnlyRetryInstruction = nextPendingQuestionSilentReplyInstruction;
+                log.warn(
+                  `[noreply-guard] NO_REPLY to an answer to the assistant's own question: ` +
+                    `runId=${params.runId} sessionId=${params.sessionId} — retrying 1/1 with respond steer`,
+                );
+                continue;
+              }
+              log.warn(
+                `[noreply-guard] NO_REPLY upheld after steer: runId=${params.runId} ` +
+                  `sessionId=${params.sessionId} — accepting silence (by-design escape)`,
+              );
             }
           }
           if (
