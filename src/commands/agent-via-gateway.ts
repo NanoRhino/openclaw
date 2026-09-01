@@ -262,6 +262,12 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
+    // Automation callers (e.g. the phase-rollover sweep) must fail fast when the gateway is
+    // unreachable instead of running an embedded agent inside their own process, which loads
+    // every plugin, competes for ports and bypasses gateway-side session locks and gates.
+    if (process.env.OPENCLAW_DISABLE_EMBEDDED_FALLBACK === "1") {
+      throw err;
+    }
     if (isGatewayAgentTimeoutError(err)) {
       const fallbackSession = createGatewayTimeoutFallbackSession(opts.agent);
       runtime.error?.(
