@@ -89,7 +89,9 @@ describe("formatPluginSourceForTable", () => {
       expected: {
         stock,
         global: path.join(homeDir, "state", "extensions"),
-        workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
+        // ~/ws/.openclaw/extensions does not exist on disk, so it is not a plugin root
+        // (see resolvePluginSourceRoots: missing workspace dirs must not fragment the cache key).
+        workspace: undefined,
       },
     });
   });
