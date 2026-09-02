@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveAgentEnforceFinalTag } from "../../agent-scope.js";
 
