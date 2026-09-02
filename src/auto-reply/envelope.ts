@@ -66,13 +66,22 @@ function sanitizeEnvelopeHeaderPart(value: string): string {
     .trim();
 }
 
-export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeFormatOptions {
+export function resolveEnvelopeFormatOptions(
+  cfg?: OpenClawConfig,
+  agentId?: string,
+): EnvelopeFormatOptions {
   const defaults = cfg?.agents?.defaults;
+  // Per-agent user timezone (agents.list[].userTimezone) outranks the global
+  // default — a multi-timezone fleet cannot express itself in defaults alone
+  // (openclaw-infra#199; #172 was a model reading a UTC envelope as local).
+  const perAgent = agentId
+    ? cfg?.agents?.list?.find((a) => a?.id === agentId)?.userTimezone
+    : undefined;
   return {
     timezone: defaults?.envelopeTimezone,
     includeTimestamp: defaults?.envelopeTimestamp !== "off",
     includeElapsed: defaults?.envelopeElapsed !== "off",
-    userTimezone: defaults?.userTimezone,
+    userTimezone: perAgent ?? defaults?.userTimezone,
   };
 }
 

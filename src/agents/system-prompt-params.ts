@@ -47,7 +47,12 @@ export function buildSystemPromptParams(params: {
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
   });
-  const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
+  const perAgentTz = params.agentId
+    ? params.config?.agents?.list?.find((a) => a?.id === params.agentId)?.userTimezone
+    : undefined;
+  const userTimezone = resolveUserTimezone(
+    perAgentTz ?? params.config?.agents?.defaults?.userTimezone,
+  );
   const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
   const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
   const stateDir = resolveStateDir(process.env);

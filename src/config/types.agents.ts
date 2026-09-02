@@ -93,6 +93,13 @@ export type AgentConfig = {
    * Omit to fall back to agents.defaults.enforceFinalTag, then provider detection.
    */
   enforceFinalTag?: boolean;
+  /**
+   * Optional IANA timezone for THIS agent's user (e.g. "America/Boise").
+   * Consumed by envelope timestamps (agents.defaults.envelopeTimezone: "user")
+   * and the system prompt time section; overrides agents.defaults.userTimezone.
+   * Absent = defaults chain (host timezone last) — existing behavior.
+   */
+  userTimezone?: string;
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;

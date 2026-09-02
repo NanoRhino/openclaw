@@ -185,4 +185,29 @@ describe("formatInboundEnvelope", () => {
       userTimezone: "Europe/Vienna",
     });
   });
+
+  it("per-agent userTimezone outranks defaults; absent agent falls back", () => {
+    const cfg = {
+      agents: {
+        defaults: { envelopeTimezone: "user", userTimezone: "Europe/Vienna" },
+        list: [{ id: "050269", userTimezone: "America/Boise" }, { id: "050304" }],
+      },
+    };
+    expect(resolveEnvelopeFormatOptions(cfg, "050269").userTimezone).toBe("America/Boise");
+    expect(resolveEnvelopeFormatOptions(cfg, "050304").userTimezone).toBe("Europe/Vienna");
+    expect(resolveEnvelopeFormatOptions(cfg, "unknown").userTimezone).toBe("Europe/Vienna");
+    expect(resolveEnvelopeFormatOptions(cfg).userTimezone).toBe("Europe/Vienna");
+  });
+
+  it("per-agent timezone renders the envelope timestamp in the user's zone", () => {
+    const cfg = {
+      agents: {
+        defaults: { envelopeTimezone: "user" },
+        list: [{ id: "050269", userTimezone: "America/Chicago" }],
+      },
+    };
+    const ts = Date.UTC(2026, 7, 25, 14, 0, 0); // 2026-08-25 14:00Z = 09:00 CDT
+    const stamped = formatEnvelopeTimestamp(ts, resolveEnvelopeFormatOptions(cfg, "050269"));
+    expect(stamped).toContain("09:00");
+  });
 });

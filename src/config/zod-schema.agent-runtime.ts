@@ -825,6 +825,7 @@ export const AgentEntrySchema = z
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     enforceFinalTag: z.boolean().optional(),
+    userTimezone: z.string().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
