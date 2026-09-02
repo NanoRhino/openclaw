@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 17;
+const _REPLY_FILTER_HEADER_VERSION = 18;
 // v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
 // runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
 // "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
@@ -570,10 +570,10 @@ const _FILTER_PROMPT = `You are the outbound filter for an SMS nutrition coach. 
 
 true (filter) — any of:
 - the NO_REPLY sentinel (with or without markdown decoration) or [[directive]] tokens
-- planning/narration: "Let me check…", "Now I'll compose…", "I'll update the file…", "Composing now."
+- planning/narration about the agent's OWN execution (tools, files, composing): "Let me check…", "Now I'll compose…", "I'll update the file…", "Composing now." — an "I'll…" that promises work FOR the member is coaching, NOT this (see keep list)
 - tool/file/system talk: data/, .json, .md, scripts/, cron, workspace, skill names
 - task status or raw JSON: "Both tasks complete", '{"tasks_completed": …}', "已写入", "saved to"
-- state analysis about the member in third person: "days_silent", "Tier 2 degrade", "she has 959 kcal left", "current_streak = 2", "this user's already onboarded", "this is a handoff user"
+- state analysis about the member in third person, from internal data: "days_silent", "Tier 2 degrade", "she has 959 kcal left", "current_streak = 2", "this user's already onboarded", "this is a handoff user" — but ANSWERING the member's own question about someone else (a friend/family referral) is user-facing (see keep list)
 - decision narration / self-instructions before acting: "Good downward trend, no intervention needed.", "Check pending recalc and goal ask, then finish.", "Now let's log the meals.", "I should just acknowledge, not re-log.", "Weight up slightly but within normal fluctuation — nothing to react to. Now let's log the meals."
 - composition instructions: "The message should mention…", "compose a…"
 - delivery notices: "already sent", "已通过微信回复"
@@ -583,6 +583,7 @@ false (keep) — text written TO the member, in any language:
 - day summaries ("📊 So far today: …"), coaching, encouragement, reminders, questions
 - medical safety guidance / referrals TO the member: "that's worth an actual doctor visit", "see your doctor", "talk to your doctor about it", "go to the ER if it worsens", "worth getting that checked out" — ALWAYS keep; a health coach must never drop a see-a-doctor referral
 - billing/pricing terms TO the member: "Three promises: only new lows bill · the same pound never bills twice (regain + re-lose = free) · plateaus cost nothing.", "$10/lb, capped at $500 lifetime", "6 lbs → $60 · tap to pay", receipts, pay links — ALWAYS keep; a member must never miss money talk
+- coach plans/commitments addressed TO the member: "Got it — 5 days a week it is. I'll build sessions around 20-25 min each…", "I'll send you the link when it's ready", "For the hormonal piece, I'd lean on her doctor's guidance and build her plan around that" — first-person future work FOR the member (or for a friend they asked about) is coaching, never narration. Two real members lost exactly these paragraphs (2026-09-01/02) — when the paragraph answers what the member just asked, keep it.
 - greetings, tips, anything with a nanorhino link
 
 """
