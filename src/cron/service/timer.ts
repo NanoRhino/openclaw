@@ -977,6 +977,47 @@ function armRunningRecheckTimer(state: CronServiceState) {
   }, MAX_TIMER_DELAY_MS);
 }
 
+/**
+ * session reaper 的墙钟上限。
+ *
+ * 它跑在 onTimer 的 finally 里、`state.running = false` 之前，而内部三步都是没有超时的
+ * 文件 I/O（读改写 sessions.json、归档 jsonl、清理归档目录）。sweep 自己的 try/catch 只能
+ * 接住抛出的异常，接不住"永不 resolve" —— 一旦某个 await 挂住，running 永远是 true，
+ * 之后每次 tick 进 onTimer 立刻 return，整个 cron 调度静默停摆，且不产生任何错误日志。
+ *
+ * 2026-09-03 线上就是这样：某台 gateway 的 cron 在 11:25:21 后停止调度，网关其余功能
+ * 全部正常，70 个任务积压 40 分钟，最后只能靠重启恢复。
+ *
+ * 会话清理是尽力而为的维护动作，晚一轮做没有任何损失；调度停摆则是用户可感的故障。
+ * 所以这里宁可放弃本轮清理，也要保证 finally 能走到底。
+ */
+const SWEEP_TIMEOUT_MS = 30_000;
+
+/** running 卡死多久算异常（见 onTimer 早退分支的看门狗）。 */
+const RUNNING_WATCHDOG_MS = 10 * 60_000;
+
+function withSweepTimeout<T>(
+  promise: Promise<T>,
+  storePath: string,
+  log: CronServiceState["deps"]["log"],
+): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      log.warn(
+        { storePath, timeoutMs: SWEEP_TIMEOUT_MS },
+        "cron: session reaper sweep timed out; skipping this round",
+      );
+      resolve(undefined);
+    }, SWEEP_TIMEOUT_MS);
+    // 不要让这个定时器拖住进程退出
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
     // Re-arm the timer so the scheduler keeps ticking even when a job is
@@ -989,10 +1030,29 @@ export async function onTimer(state: CronServiceState) {
     // zero-delay hot-loop when past-due jobs are waiting for the current
     // execution to finish.
     // See: https://github.com/openclaw/openclaw/issues/12025
-    armRunningRecheckTimer(state);
-    return;
+    //
+    // #12025 修的是"早退后没有定时器"；这里再兜一层"running 永远为真"。
+    // sweep 的超时只保住了已知那一处，onTimer 里其它 await（locked / persist / 任务执行）
+    // 同样没有超时保护，任何一处永不 resolve 都会让 running 卡死 —— 之后每次 tick 都在
+    // 这个分支返回，调度静默停摆且没有任何错误日志。2026-09-03 线上就是这样，靠重启才恢复。
+    // 卡住超阈值就强制复位并 error 级告警：宁可重入一轮（幂等由 locked + runningAtMs 保证），
+    // 也不要再出现"活着但不干活、还没人知道"。
+    const stuckSince = state.runningSinceMs;
+    const stuckMs = typeof stuckSince === "number" ? state.deps.nowMs() - stuckSince : 0;
+    if (stuckMs > RUNNING_WATCHDOG_MS) {
+      state.deps.log.error(
+        { stuckMs, watchdogMs: RUNNING_WATCHDOG_MS },
+        "cron: scheduler stuck with running=true; forcing reset",
+      );
+      state.running = false;
+      state.runningSinceMs = undefined;
+    } else {
+      armRunningRecheckTimer(state);
+      return;
+    }
   }
   state.running = true;
+  state.runningSinceMs = state.deps.nowMs();
   // Keep a watchdog timer armed while a tick is executing. If execution hangs
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
@@ -1135,12 +1195,16 @@ export async function onTimer(state: CronServiceState) {
       const nowMs = state.deps.nowMs();
       for (const storePath of storePaths) {
         try {
-          await sweepCronRunSessions({
-            cronConfig: state.deps.cronConfig,
-            sessionStorePath: storePath,
-            nowMs,
-            log: state.deps.log,
-          });
+          await withSweepTimeout(
+            sweepCronRunSessions({
+              cronConfig: state.deps.cronConfig,
+              sessionStorePath: storePath,
+              nowMs,
+              log: state.deps.log,
+            }),
+            storePath,
+            state.deps.log,
+          );
         } catch (err) {
           state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
         }
@@ -1148,6 +1212,7 @@ export async function onTimer(state: CronServiceState) {
     }
 
     state.running = false;
+    state.runningSinceMs = undefined;
     armTimer(state);
   }
 }

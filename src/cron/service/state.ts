@@ -147,6 +147,8 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** running 置位的时刻，供看门狗判断是否卡死。 */
+  runningSinceMs?: number;
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /**
@@ -165,6 +167,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
+    runningSinceMs: undefined,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedMissingSessionTargetJobIds: new Set<string>(),
