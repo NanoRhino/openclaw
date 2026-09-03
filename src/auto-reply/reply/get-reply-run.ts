@@ -607,7 +607,7 @@ export async function runPreparedReply(
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
-  const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
+  const envelopeOptions = resolveEnvelopeFormatOptions(cfg, { workspaceDir });
   const inboundUserContext = buildInboundUserContextPrefix(
     isNewSession
       ? {

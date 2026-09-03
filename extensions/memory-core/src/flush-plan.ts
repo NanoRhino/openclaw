@@ -96,6 +96,8 @@ export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
     nowMs?: number;
+    /** Per-workspace timezone (USER.md); default = config/host. */
+    timeZone?: string;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
@@ -115,9 +117,15 @@ export function buildMemoryFlushPlan(
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
-  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs, resolved.timeZone);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);
-  const relativePath = `memory/${dateStamp}.md`;
+  // patch-044-memory-flush-path-env: 允许用环境变量指定 flush 写入文件（相对 workspace，
+  // 支持 YYYY-MM-DD 占位）。NanoRhino 配 memory/medium-term.md 让 flush 写进自己的记忆体系；
+  // 不配则维持默认 memory/<日期>.md。注意写工具是 append-only，别指向 JSON 文件。
+  const envFlushPath = String(process.env.OPENCLAW_MEMORY_FLUSH_RELATIVE_PATH ?? "").trim();
+  const relativePath = envFlushPath
+    ? envFlushPath.replaceAll("YYYY-MM-DD", dateStamp)
+    : `memory/${dateStamp}.md`;
 
   const promptBase = ensureNoReplyHint(
     ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
@@ -133,8 +141,19 @@ export function buildMemoryFlushPlan(
     forceFlushTranscriptBytes,
     reserveTokensFloor,
     model: defaults?.model?.trim() || undefined,
-    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
-    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    // patch-045: 强制追加的安全 hint 写死 memory/YYYY-MM-DD.md，与自定义 relativePath 矛盾
+    // （模型两头听，写错路径持续发生）。让 hint 路径跟随 relativePath；默认时逐字等价。
+    prompt: appendCurrentTimeLine(
+      promptBase
+        .replaceAll("memory/YYYY-MM-DD.md", relativePath)
+        .replaceAll("YYYY-MM-DD.md", relativePath.split("/").pop() ?? `${dateStamp}.md`)
+        .replaceAll("YYYY-MM-DD", dateStamp),
+      timeLine,
+    ),
+    systemPrompt: systemPrompt
+      .replaceAll("memory/YYYY-MM-DD.md", relativePath)
+      .replaceAll("YYYY-MM-DD.md", relativePath.split("/").pop() ?? `${dateStamp}.md`)
+      .replaceAll("YYYY-MM-DD", dateStamp),
     relativePath,
   };
 }

@@ -1361,14 +1361,14 @@ export async function runReplyAgent(params: {
       const replyPayloads = payloadResult.replyPayloads.map((payload) =>
         markReplyPayloadForSourceSuppressionDelivery(payload),
       );
+      // patch-043-memory-flush-no-shortcircuit: flush 轮的可见错误（典型：写入路径被拒）
+      // 不再 fail + return——那会放弃用户这一轮、把错误文本当回复（再被 reply-filter 丢弃，
+      // 用户零回复，2026-08-22 两例）。改为记 warn 后继续跑用户轮；flush 失败只损失一次记忆写入。
       if (replyPayloads.length > 0) {
-        replyOperation.fail(
-          "run_failed",
-          new Error("memory flush produced visible error payloads"),
-        );
-        await signalTypingIfNeeded(replyPayloads, typingSignals);
-        return returnWithQueuedFollowupDrain(
-          replyPayloads.length === 1 ? replyPayloads[0] : replyPayloads,
+        console.warn(
+          `[patch-043] memory flush produced ${replyPayloads.length} visible error payload(s); continuing user turn: ${String(
+            replyPayloads[0]?.text ?? "",
+          ).slice(0, 160)}`,
         );
       }
     }

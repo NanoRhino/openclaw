@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { resolveWorkspaceTimezone } from "../../agents/date-time.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
@@ -25,6 +26,17 @@ import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+
+/** Per-workspace timezone for the flush prompt's date stamp / Current time (USER.md → config → host). */
+function memoryFlushTimeZone(params: {
+  cfg?: { agents?: { defaults?: { userTimezone?: string } } };
+  followupRun: { run: { workspaceDir?: string } };
+}): string {
+  return resolveWorkspaceTimezone(
+    params.followupRun.run.workspaceDir,
+    params.cfg?.agents?.defaults?.userTimezone,
+  );
+}
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -507,7 +519,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    timeZone: memoryFlushTimeZone(params),
+  });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
@@ -711,7 +726,10 @@ export async function runMemoryFlushIfNeeded(params: {
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    timeZone: memoryFlushTimeZone(params),
+  });
   if (!memoryFlushPlan) {
     return params.sessionEntry;
   }
@@ -919,6 +937,7 @@ export async function runMemoryFlushIfNeeded(params: {
     resolveMemoryFlushPlan({
       cfg: params.cfg,
       nowMs: memoryFlushNowMs,
+      timeZone: memoryFlushTimeZone(params),
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
   const flushSystemPrompt = [

@@ -323,6 +323,32 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("does not fall back to embedded agent when OPENCLAW_DISABLE_EMBEDDED_FALLBACK=1", async () => {
+    const previous = process.env.OPENCLAW_DISABLE_EMBEDDED_FALLBACK;
+    process.env.OPENCLAW_DISABLE_EMBEDDED_FALLBACK = "1";
+    try {
+      await withTempStore(async () => {
+        callGateway.mockRejectedValue(createGatewayClosedError());
+        // No mockLocalAgentReply(): the embedded agent must not run, and a queued
+        // mockImplementationOnce would leak into the next test.
+
+        await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow();
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(
+          mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+        ).toBe(false);
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_DISABLE_EMBEDDED_FALLBACK;
+      } else {
+        process.env.OPENCLAW_DISABLE_EMBEDDED_FALLBACK = previous;
+      }
+    }
+  });
+
   it("does not fall back to embedded agent for gateway request errors", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(

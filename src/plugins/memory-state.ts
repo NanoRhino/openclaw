@@ -77,6 +77,8 @@ export type MemoryFlushPlan = {
 export type MemoryFlushPlanResolver = (params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  /** Per-workspace timezone for the date stamp / Current time line. */
+  timeZone?: string;
 }) => MemoryFlushPlan | null;
 
 export type RegisteredMemorySearchManager = MemorySearchManager;
@@ -256,6 +258,7 @@ export function registerMemoryFlushPlanResolverForPlugin(
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
+  timeZone?: string;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
 }

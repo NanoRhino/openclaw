@@ -324,6 +324,17 @@ function repairToolCallInputs(
       continue;
     }
 
+    // An assistant turn that is nothing but thinking blocks carries no replayable
+    // content, and providers with signed thinking (Anthropic/Bedrock) reject it once
+    // it is merged with neighbouring assistant turns ("thinking blocks in the latest
+    // assistant message cannot be modified"). Such turns appear when an unknown tool
+    // call was stripped below and only the thinking siblings survived. Drop them.
+    if (msg.content.length > 0 && msg.content.every((block) => isThinkingLikeBlock(block))) {
+      droppedAssistantMessages += 1;
+      changed = true;
+      continue;
+    }
+
     if (
       allowProviderOwnedThinkingReplay &&
       msg.content.some((block) => isThinkingLikeBlock(block)) &&
@@ -406,7 +417,8 @@ function repairToolCallInputs(
     }
 
     if (droppedInMessage > 0) {
-      if (nextContent.length === 0) {
+      // Never persist/replay a turn whose only survivors are thinking blocks (see above).
+      if (nextContent.length === 0 || nextContent.every((block) => isThinkingLikeBlock(block))) {
         droppedAssistantMessages += 1;
         changed = true;
         continue;
