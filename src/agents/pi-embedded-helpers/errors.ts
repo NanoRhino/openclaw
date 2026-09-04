@@ -1131,12 +1131,32 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+  // Never return raw unhandled errors to the user. Provider/runtime messages
+  // carry account and infrastructure details — "Validation error: Access to
+  // Anthropic models is not allowed for this account." (Bedrock
+  // ValidationException) reached six SMS members verbatim on 2026-09-04
+  // (openclaw-infra#211). Log the raw text for operators; the reply gets a
+  // safe, member-directed copy.
+  // OpenClaw's own config diagnostics ("Model-provider request.proxy/… is not
+  // yet supported for api …") are operator guidance, not provider wording —
+  // keep them actionable.
+  if (OPENCLAW_CONFIG_DIAGNOSTIC_RE.test(raw)) {
+    return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  log.warn(`Unclassified assistant error replaced with safe copy: ${raw.slice(0, 300)}`);
+  return UNCLASSIFIED_ASSISTANT_ERROR_USER_MESSAGE;
 }
+
+const OPENCLAW_CONFIG_DIAGNOSTIC_RE = /^Model-provider\b/;
+
+/**
+ * Reply text used when an assistant error matches none of the known shapes.
+ * Member-directed ("your message") on purpose: the SMS reply filter treats
+ * second-person copy as user-facing, so this line is delivered rather than
+ * classified away, and it never echoes provider wording.
+ */
+export const UNCLASSIFIED_ASSISTANT_ERROR_USER_MESSAGE =
+  "Sorry — something went wrong on our side while processing your message. Please try again in a moment.";
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
