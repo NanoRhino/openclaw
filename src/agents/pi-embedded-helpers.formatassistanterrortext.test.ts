@@ -4,6 +4,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  UNCLASSIFIED_ASSISTANT_ERROR_USER_MESSAGE,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
@@ -93,6 +94,21 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("never echoes an unclassified provider error to the user (openclaw-infra#211)", () => {
+    const raw = "Validation error: Access to Anthropic models is not allowed for this account.";
+    const result = formatAssistantErrorText(makeAssistantError(raw));
+    expect(result).toBe(UNCLASSIFIED_ASSISTANT_ERROR_USER_MESSAGE);
+    expect(result).not.toContain("Anthropic");
+    expect(result).not.toContain("account");
+    expect(result).toMatch(/\byour\b/);
+    expect(result).not.toMatch(/\bfailed\b/);
+  });
+  it("replaces long unclassified errors with the safe copy instead of truncating them", () => {
+    const raw = `AccessDeniedException: ${"x".repeat(700)}`;
+    expect(formatAssistantErrorText(makeAssistantError(raw))).toBe(
+      UNCLASSIFIED_ASSISTANT_ERROR_USER_MESSAGE,
+    );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {
     const msg = makeAssistantError(
