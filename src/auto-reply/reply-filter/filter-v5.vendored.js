@@ -2,7 +2,21 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 18;
+const _REPLY_FILTER_HEADER_VERSION = 19;
+// v19 (2026-09-04, openclaw-infra#186 reopen): the 6 service-incident apology
+// notices sent that day were each cut 546→271 chars by two separate
+// mechanisms. (1) The narration-opener regex ("The user/bug/issue/…") killed
+// "The issue has been fully resolved … if a meal or weigh-in you sent …" —
+// decisions log since 2026-07: that opener family killed 10 paragraphs, 4 true
+// narration (none addressed to the member) + those 6. "The issue/problem/error"
+// openers are now exempt when the paragraph speaks to the member (you/your)
+// and carries no internal hard mark. (2) The classifier killed the bare
+// salutation "Dear NanoRhino member," and the sign-off "— The NanoRhino Team"
+// (no clean signal, so they were judged in isolation as meta). Those frames
+// now skip the classifier (_RF_NOTICE_FRAME) — corpus 2026-09-04: 46
+// delivered salutation lines (all coach greetings), 5 "— NanoRhino" sign-offs,
+// zero narration hits.
+
 // v14 (2026-08-01, agents 050171/050184/050273 + 10 others): the embedded
 // runner's tool-error warning — "⚠️ 📝 Edit: in /tmp/noop.txt failed" /
 // "⚠️ ✍️ Write: to /dev/null failed" — reached 13 real users over 7/17-8/1.
@@ -405,6 +419,7 @@ function _fastReject(p) {
     return true;
   // Thinking/debug openers at paragraph start ("The gateway isn't running...", "Wait, ...")
   if (
+    !_rfMemberNoticeOpener(p) &&
     /^(?:The (?:user|bug|issue|problem|error|fix|gateway|script|file|code|agent|cron|workspace|skill)\b|Wait[,.]|Hmm\b|I (?:need|should|want) to |I'm going to |First[,，]? (?:I|let)\b|Next[,，]? I\b|Now marking\b|Perfect[.!] (?:Now|I|The)|Good[.!] (?:Now|I|The)|Done[.!] (?:Now|I|The))/i.test(
       p,
     )
@@ -840,9 +855,26 @@ const _RF_BILLING = new RegExp(
   ].join("|"),
   "iu",
 );
+// v19: member-addressed service notice opening like narration ("The issue has
+// been fully resolved …") — see changelog. Narrow on purpose: opener limited to
+// issue/problem/error, requires you/your, and no hard internal marker.
+function _rfMemberNoticeOpener(p) {
+  return (
+    /^The (?:issue|problem|error)\b/i.test(p) &&
+    /\byou\b|\byour\b/i.test(p) &&
+    !_RF_HARD_MARK.test(p)
+  );
+}
+// v19: bare salutation / team sign-off lines of a notice — user-facing frames
+// that carry no clean signal of their own. Skip the classifier.
+const _RF_NOTICE_FRAME =
+  /^(?:Dear|Hi|Hello|Hey)\b[^\n]{0,60}[,，:]?$|^[—–-]\s*(?:The )?NanoRhino(?: Team)?[.!]?$/i;
 function _rfGateSkipLLM(p) {
   return (
-    (_RF_CLEAN_SIG.test(p) || _RF_MEDICAL_REFERRAL.test(p) || _RF_BILLING.test(p)) &&
+    (_RF_CLEAN_SIG.test(p) ||
+      _RF_MEDICAL_REFERRAL.test(p) ||
+      _RF_BILLING.test(p) ||
+      _RF_NOTICE_FRAME.test(p)) &&
     !_RF_HARD_MARK.test(p)
   );
 }
