@@ -2,7 +2,16 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 19;
+const _REPLY_FILTER_HEADER_VERSION = 20;
+// v20 (2026-09-06, openclaw-infra#200 — from #185): STRIP-type transform for
+// leaked internal tokens on macro lines: "Protein 42g (no token)" reached 7
+// users / 21 messages. The kill-type layers can't help — dropping the paragraph
+// eats the member's whole day card — so the token is removed and the line is
+// kept. Deliberately narrow: only "(no token)/(none)/(null)/(undefined)"
+// immediately after a number+unit (42g / 250 kcal); a standalone "(none)" in
+// prose ("Restrictions: (none)") is untouched. Corpus 2026-09-06: 21/21 known
+// instances hit, 0 other lines touched. Decision log: stats.st + {y:"strip"}.
+
 // v19 (2026-09-04, openclaw-infra#186 reopen): the 6 service-incident apology
 // notices sent that day were each cut 546→271 chars by two separate
 // mechanisms. (1) The narration-opener regex ("The user/bug/issue/…") killed
@@ -219,6 +228,8 @@ const _CORRECTION_DIVIDER =
 // "[[reply_to_current]]" prefix observed on agent 050171 (2026-07-10). The
 // token is stripped, the rest of the line is delivered.
 const _DIRECTIVE_TOKEN_G = /^[ \t]*(?:\[\[[A-Za-z0-9_:.-]{1,40}\]\][ \t]*)+/gm;
+const _INTERNAL_TOKEN_G =
+  /(\d+(?:\.\d+)?\s*(?:g|kcal|cal|calories))[ \t]*\((?:no token|none|null|undefined)\)/gi;
 // Strip standalone narration/NO_REPLY lines from a body. Returns the cleaned
 // body (may be empty/whitespace, which the caller treats as "suppress").
 function _stripNarrationLines(text) {
@@ -976,6 +987,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     rk: 0,
     ls: 0,
     dt: 0,
+    st: 0,
     fa: 0,
     gs: 0,
     lc: 0,
@@ -1004,6 +1016,20 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
       .trim();
     if (text !== _pre) stats.dt = 1;
     if (!text) return _done(true, "");
+  }
+  // v20: macro-line token leak ("Protein 42g (no token)") — strip the
+  // token, keep the line; see changelog.
+  if (/\((?:no token|none|null|undefined)\)/i.test(text)) {
+    const _hits = text.match(_INTERNAL_TOKEN_G) || [];
+    if (_hits.length) {
+      const _at = text.search(_INTERNAL_TOKEN_G);
+      stats.st = _hits.length;
+      stats.k.push({
+        y: "strip",
+        p: text.slice(Math.max(0, _at - 30), _at + 40).replace(/\n/g, " "),
+      });
+      text = text.replace(_INTERNAL_TOKEN_G, "$1");
+    }
   }
   // Line-level NO_REPLY + self-narration stripping (runs before paragraph
   // splitting so a `**NO_REPLY**` / "Let me finalize:" / "Stage 1, SEND" line
