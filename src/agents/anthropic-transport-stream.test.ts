@@ -1,5 +1,5 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -411,6 +411,86 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload).toMatchObject({
       thinking: { type: "adaptive" },
       output_config: { effort: "xhigh" },
+    });
+  });
+
+  describe("Claude 5 effort bound (openclaw-infra#222)", () => {
+    const previous = process.env.OPENCLAW_CLAUDE5_EFFORT;
+    beforeEach(() => {
+      delete process.env.OPENCLAW_CLAUDE5_EFFORT;
+    });
+    afterEach(() => {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_CLAUDE5_EFFORT;
+      } else {
+        process.env.OPENCLAW_CLAUDE5_EFFORT = previous;
+      }
+    });
+
+    const runSonnet5 = async () => {
+      // prod registers the direct claude-sonnet-5 entry with reasoning:false
+      // (openclaw.json models.providers.anthropic), so no thinking block is built.
+      const model = makeAnthropicTransportModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: false,
+        maxTokens: 8192,
+      });
+      await runTransportStream(
+        model,
+        { messages: [{ role: "user", content: "Log my breakfast." }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      );
+      return latestAnthropicRequest().payload as Record<string, unknown>;
+    };
+
+    it("pins output_config.effort=low by default with no thinking block", async () => {
+      const payload = await runSonnet5();
+      expect(payload).toMatchObject({ output_config: { effort: "low" } });
+      expect(payload.thinking).toBeUndefined();
+    });
+
+    it("honors OPENCLAW_CLAUDE5_EFFORT=medium", async () => {
+      process.env.OPENCLAW_CLAUDE5_EFFORT = "medium";
+      expect(await runSonnet5()).toMatchObject({ output_config: { effort: "medium" } });
+    });
+
+    it("sends no effort control when OPENCLAW_CLAUDE5_EFFORT=off", async () => {
+      process.env.OPENCLAW_CLAUDE5_EFFORT = "off";
+      expect((await runSonnet5()).output_config).toBeUndefined();
+    });
+
+    it("leaves an explicit thinking block alone (reasoning:true Sonnet 5 → thinking disabled, no effort)", async () => {
+      const model = makeAnthropicTransportModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        maxTokens: 8192,
+      });
+      await runTransportStream(
+        model,
+        { messages: [{ role: "user", content: "Hi" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      );
+      const payload = latestAnthropicRequest().payload as Record<string, unknown>;
+      expect(payload.thinking).toEqual({ type: "disabled" });
+      expect(payload.output_config).toBeUndefined();
+    });
+
+    it("leaves Claude 4.6 untouched", async () => {
+      const model = makeAnthropicTransportModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        maxTokens: 8192,
+      });
+      await runTransportStream(
+        model,
+        { messages: [{ role: "user", content: "Hi" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      );
+      expect(
+        (latestAnthropicRequest().payload as Record<string, unknown>).output_config,
+      ).toBeUndefined();
     });
   });
 });
