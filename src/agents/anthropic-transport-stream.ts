@@ -123,6 +123,44 @@ function supportsAdaptiveThinking(modelId: string): boolean {
   );
 }
 
+const CLAUDE5_MODEL_RE = /claude-(?:sonnet|opus|haiku)-5(?:[.-]\d+)?(?:-|$)/;
+const CLAUDE5_EFFORT_LEVELS = new Set(["low", "medium", "high", "max"]);
+
+/**
+ * Claude 5 models reason ADAPTIVELY BY DEFAULT and bill the reasoning as output
+ * tokens; the adaptive whitelist above stops at the 4.x family, so for a
+ * Claude 5 model with `reasoning: false` (or an unsupported thinking level) no
+ * effort control is sent at all and the model picks its own — on the NanoRhino
+ * coach that meant p90 steps/turn 3 → 5, ~3× more read/exec/edit calls and
+ * model-call p90 7.5 s → 15.4 s on the first direct-API day (2026-09-05,
+ * openclaw-infra#222) versus Bedrock, where patch 010 pinned
+ * `output_config.effort=low`. Mirror of that patch for the Messages transport:
+ * `OPENCLAW_CLAUDE5_EFFORT` = low (default when unset) | medium | high | max |
+ * off (send nothing). An `output_config.effort` already resolved upstream
+ * (adaptive path) is respected. Verified 2026-09-06: the API accepts
+ * `output_config.effort` without a `thinking` block on claude-sonnet-5.
+ */
+export function applyClaude5EffortBound(modelId: string, params: Record<string, unknown>): void {
+  if (!CLAUDE5_MODEL_RE.test(modelId)) {
+    return;
+  }
+  if (params.output_config && typeof params.output_config === "object") {
+    return;
+  }
+  // Only the model-default (adaptive) path: an explicit thinking block —
+  // adaptive with its own effort, a 4.x-style budget, or `disabled` — was
+  // chosen upstream and is left alone.
+  if (params.thinking !== undefined) {
+    return;
+  }
+  const raw = (process.env.OPENCLAW_CLAUDE5_EFFORT ?? "low").trim().toLowerCase();
+  if (raw === "off" || raw === "0" || raw === "false") {
+    return;
+  }
+  const effort = CLAUDE5_EFFORT_LEVELS.has(raw) ? raw : "low";
+  params.output_config = { effort };
+}
+
 function mapThinkingLevelToEffort(level: ThinkingLevel, modelId: string): AnthropicAdaptiveEffort {
   switch (level) {
     case "minimal":
@@ -673,6 +711,7 @@ function buildAnthropicParams(
       params.thinking = { type: "disabled" };
     }
   }
+  applyClaude5EffortBound(model.id, params);
   if (options?.metadata && typeof options.metadata.user_id === "string") {
     params.metadata = { user_id: options.metadata.user_id };
   }
