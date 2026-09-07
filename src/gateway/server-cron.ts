@@ -19,6 +19,7 @@ import {
 } from "../cron/run-log.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
+import { setActiveCronService } from "../plugin-sdk/cron-service-registry.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
@@ -491,5 +492,7 @@ export function buildGatewayCronService(params: {
     },
   });
 
+  // 让同进程的扩展（plugin-sdk/cron-service-registry）直接用 CronService 建任务，不必起 CLI 经 websocket 连回自己
+  setActiveCronService({ cron, getRuntimeConfig });
   return { cron, storePath, cronEnabled };
 }
