@@ -320,7 +320,14 @@ async function _classifyParagraph(text: string, filterCfg: ReplyFilterCfg): Prom
       const client = _replyFilterCache._brClient as {
         send: (cmd: unknown) => Promise<{ body: Uint8Array }>;
       };
-      const res = await client.send(cmd);
+      // Bedrock 分类调用必须有超时：2026-09-05 Bedrock ServiceUnavailable 期间一次调用永久挂起，
+      // dispatchInboundMessage 收尾 await dispatcher.waitForIdle() 等的 sendChain 永不结束 → 微信合并器
+      // 停在 delivering，该用户之后所有消息"攒到下一轮"两天零回复。超时抛 AbortError 走下面 catch → 该段保留（fail-open）。
+      const _rfTimeoutMs =
+        Number((filterCfg as { llmTimeoutMs?: unknown }).llmTimeoutMs) > 0
+          ? Number((filterCfg as { llmTimeoutMs?: unknown }).llmTimeoutMs)
+          : 8000;
+      const res = await client.send(cmd, { abortSignal: AbortSignal.timeout(_rfTimeoutMs) });
       const body = JSON.parse(new TextDecoder().decode(res.body));
       // Try tools API path first: content[].type=tool_use, input.filter is boolean.
       const _toolUse = (
