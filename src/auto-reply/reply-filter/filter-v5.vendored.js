@@ -2,7 +2,29 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 20;
+const _REPLY_FILTER_HEADER_VERSION = 21;
+// v21 (2026-09-12, openclaw-infra#186 4th reopen): the classifier's verdict on
+// an UNMARKED paragraph of an interactive (dispatch) reply is now advisory.
+// Decisions log, full history (228 classifier kills): since v16 (2026-08-15)
+// the dispatch path recorded 20 classifier kills and every one was a member-
+// facing sentence with no internal marker — "Got it — 5 days a week it is…",
+// "For the hormonal piece…", "Fixed — that was the same session…", "That
+// makes sense…", "Got it — no beets…". The only true kills in that window
+// carried a hard mark (step/state narration) or belong to two shapes the
+// marker list missed ("Just a thumbs-up reaction … no reply needed",
+// "Validation error: …") — those shapes are hard marks now. Three belts:
+//   (1) new hard marks (deterministic): "Validation error:", reaction notes
+//       ("thumbs-up reaction …"), "state update(s)", "proactive slot",
+//       "I have everything I need", "content type", "via the (system) script";
+//       and the `rotat*` marker is narrowed to session/memory/log rotation
+//       (it was killing "Rotate 2–3 of these through the week" coaching).
+//   (2) member-directed conversational openers ("Got it —", "Fixed —",
+//       "Noted", "Yes,", "Here's", "No need to reply", …) skip the classifier
+//       when the paragraph carries no hard mark (_RF_CONVO_OPENER).
+//   (3) dispatch path: a classifier "true" on a paragraph with no hard mark is
+//       logged ({y:"llm-veto"}, stats.lv) but NOT applied. The deliver path
+//       (cron/announce — the historical leak source, fail-closed) is unchanged.
+//       Kill switch: reply-filter.json {"classifierAdvisoryOnDispatch": false}.
 // v20 (2026-09-06, openclaw-infra#200 — from #185): STRIP-type transform for
 // leaked internal tokens on macro lines: "Protein 42g (no token)" reached 7
 // users / 21 messages. The kill-type layers can't help — dropping the paragraph
@@ -631,7 +653,10 @@ async function _classifyParagraphEx(text, filterCfg, stats, tmoMs) {
   try {
     const prompt = _FILTER_PROMPT.replace("{text}", text.slice(0, 500));
     let answer;
-    if ((filterCfg.provider ?? "bedrock") === "openai") {
+    if (typeof globalThis.__rfClassifyOverride === "function") {
+      // test-local.mjs hook: a synthetic verdict, no network (v21 tests).
+      answer = String(await globalThis.__rfClassifyOverride(text));
+    } else if ((filterCfg.provider ?? "bedrock") === "openai") {
       // OpenAI classifier (gpt-5.5, reasoning_effort "none" → 0 reasoning
       // tokens = fast, like a non-reasoning model). Anthropic org was
       // disabled 2026-06-26; this is the live classifier path.
@@ -794,12 +819,26 @@ const _RF_HARD_MARK = new RegExp(
     "\\bNO_REPLY\\b",
     "\\b(?:(?:the|this|that) user|handoff user|she has|he has)\\b",
     "\\b(?:Tier \\d|degrade|nudgeIndex|recall_topics|day_summary|hint_count|suggestion_type|short-term|medium-term|long-term|meal_checkin|SKILL\\.md|PLAN\\.md|USER\\.md|cron|meal card)\\b",
-    "\\b(?:consolidat|rotat|compos|verbatim|sentinel|payload|classif)\\w*",
+    "\\b(?:consolidat|compos|verbatim|sentinel|payload|classif)\\w*",
+    // v21: rotation only as an internal noun — "Rotate 2–3 of these through the
+    // week" is coaching copy and was hard-marked (then classifier-killed).
+    "\\b(?:session|memory|log|file|transcript) rotat\\w*",
+    "\\brotat\\w* (?:the |this )?(?:session|memory|log|file|transcript)s?\\b",
     "\\bmark(?:ing|ed)? (?:it |as |them )?sent\\b",
+    // v21: unmarked true kills seen in the decisions log — never member copy.
+    // ("no reply needed" itself is NOT a mark: coach sign-offs say it — corpus 2026-09-12: 7 delivered lines.)
+    "\\bValidation error:",
+    "\\b(?:thumbs[- ]?up|like|loved?|heart) reaction\\b",
+    "\\breaction to (?:my|the|your) (?:last|previous)\\b",
+    "\\bstate updates?\\b",
+    "\\bproactive slot\\b",
+    "\\bI have everything I need\\b",
+    "\\bcontent type\\b",
+    "\\bvia the (?:system )?script\\b",
     "\\b(?:no cleanup needed|case-sensitiv\\w*|tasks? complete\\w*|restrictions? on file|no (?:notable )?restrictions)\\b",
     "\\bNow (?:update|set|mark|build|create|write|read|pull|delete|add|run|re-?run|execute|verify|check)\\b",
     "\\bLet me (?!know\\b)",
-    "\\b(?:I need to|I should(?:n'?t)?|Now I|Now let)\\b",
+    "\\b(?:I need to|I should(?:n'?t)?(?!'ve\\b| have\\b)|Now I|Now let)\\b", // v21: "it's not something I should've implied" is member copy
     "\\b(?:no intervention needed|pending recalc|goal[- ]weight ask|goal ask|re-?deriv)\\w*",
     // v16: pipeline step tokens / report internals are never user-facing
     "\\bStep \\d+[ab]\\b",
@@ -880,12 +919,71 @@ function _rfMemberNoticeOpener(p) {
 // that carry no clean signal of their own. Skip the classifier.
 const _RF_NOTICE_FRAME =
   /^(?:Dear|Hi|Hello|Hey)\b[^\n]{0,60}[,，:]?$|^[—–-]\s*(?:The )?NanoRhino(?: Team)?[.!]?$/i;
+// v21: member-directed conversational openers — acknowledgments, completed-
+// action reports, answer leads. The classifier read these as narration when the
+// sentence had no other clean signal ("Got it — 5 days a week it is. I'll build
+// sessions…", "Fixed — that was the same session…", "Noted for next time too").
+// Bare "Good —"/"That's"/"This is" are NOT openers here: they lead narration as
+// often as replies. Any hard mark still sends the paragraph to the classifier.
+const _RF_CONVO_OPENER = new RegExp(
+  "^\\s*(?:" +
+    [
+      "Got it",
+      "Fixed(?: it| that)?",
+      "Done",
+      "Noted",
+      "Yes",
+      "Yeah",
+      "Yep",
+      "Nope",
+      "Sure",
+      "Perfect",
+      "Okay",
+      "OK",
+      "Oops",
+      "Absolutely",
+      "Of course",
+      "Correct",
+      "Exactly",
+      "Totally",
+      "Makes sense",
+      "(?:Ah,? )?that makes sense",
+      "Good (?:catch|question|call|point|to know|instinct|news|idea|choice|plan|move|thinking)",
+      "Fair (?:question|point|enough)",
+      "Great (?:question|call|point)",
+      "Here(?:'s| is| are)",
+      "Happy to",
+      "Sounds good",
+      "No worries",
+      "No need to reply",
+      "Quick (?:note|heads[- ]up)",
+      "Heads[- ]up",
+      "Thanks",
+      "Thank you",
+      "Updated",
+      "Adding",
+      "Removed",
+      "Swapped",
+      "Changed",
+      "Short answer",
+      "Long story short",
+      "明白",
+      "收到",
+      "好的",
+      "没问题",
+      "已改",
+      "已更新",
+    ].join("|") +
+    ")(?![A-Za-z0-9])",
+  "iu",
+);
 function _rfGateSkipLLM(p) {
   return (
     (_RF_CLEAN_SIG.test(p) ||
       _RF_MEDICAL_REFERRAL.test(p) ||
       _RF_BILLING.test(p) ||
-      _RF_NOTICE_FRAME.test(p)) &&
+      _RF_NOTICE_FRAME.test(p) ||
+      _RF_CONVO_OPENER.test(p)) &&
     !_RF_HARD_MARK.test(p)
   );
 }
@@ -993,6 +1091,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     lc: 0,
     ch: 0,
     lk: 0,
+    lv: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1109,6 +1208,18 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
           }
         }
         if (_cr.filter) {
+          // v21: on the interactive path the classifier alone cannot kill an
+          // unmarked paragraph — every such kill since v16 was member copy.
+          // Logged as a veto so the weekly review still sees what it wanted.
+          if (
+            _rfPath !== "deliver" &&
+            filterCfg.classifierAdvisoryOnDispatch !== false &&
+            !_RF_HARD_MARK.test(p)
+          ) {
+            stats.lv++;
+            stats.k.push({ y: "llm-veto", p: _pt.slice(0, 90) });
+            return p;
+          }
           stats.lk++;
           stats.k.push({ y: "llm", p: _pt.slice(0, 90) });
           return null;
