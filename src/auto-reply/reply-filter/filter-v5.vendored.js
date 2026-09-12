@@ -2,7 +2,25 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 21;
+const _REPLY_FILTER_HEADER_VERSION = 22;
+// v22 (2026-09-12, openclaw-infra#272): persist-claim gate. 050313 got "Got it —
+// logged 4 magnesium chews…" three nights out of six with ZERO bytes written:
+// twice the model never called meal_checkin, once it did and the engine
+// returned action:none while the coach still said "logged". No plugin hook can
+// transform the delivered text, so the reply filter is the delivery-side
+// chokepoint: meal-tracker-v2 publishes what the current turn actually did
+// (globalThis.__nrTurnState[agentId] = {userAt, tools[], checkins[]} — user
+// message opens the turn, every tool call is recorded, meal_checkin with its
+// outcome) and on the DISPATCH path a sentence that claims "logged / saved /
+// recorded / 记录好了" is removed when nothing in the turn backs it, replaced by
+// an explicit correction ("Correction — that didn't actually get saved on my
+// end. Send it again and I'll log it properly."). Conservative on purpose: any
+// exec/bash call (weight, exercise, reminder scripts write outside the engine)
+// or any non-none meal_checkin outcome (log/edit/confirm/query) counts as
+// backing; negated ("haven't logged"), recap ("already logged from earlier") and
+// modal ("I'll log it once…") sentences are never touched; no turn state (plugin
+// absent, cron turn, stale > 15 min) → no correction. Decision log: stats.pc +
+// {y:"claim"}; journal line "[reply-filter] persist-claim corrected".
 // v21 (2026-09-12, openclaw-infra#186 4th reopen): the classifier's verdict on
 // an UNMARKED paragraph of an interactive (dispatch) reply is now advisory.
 // Decisions log, full history (228 classifier kills): since v16 (2026-08-15)
@@ -987,6 +1005,108 @@ function _rfGateSkipLLM(p) {
     !_RF_HARD_MARK.test(p)
   );
 }
+// ── v22 persist-claim gate (openclaw-infra#272) — see changelog ──
+const _RF_CLAIM_RE =
+  /\b(?:logged|saved|recorded|tracked|noted down|written down|added (?:it |that |them |those |this )?to (?:your|the) (?:log|diary|day|record|tally))\b|(?:记录好了|已记录|记下了|已经记|记上了|已保存|已登记|已加(?:上|入)?)/iu;
+const _RF_CLAIM_NEG_RE =
+  /\b(?:not|n't|never|didn'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|couldn'?t|can'?t|won'?t|nothing|without|un-?logged|unsaved)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
+const _RF_CLAIM_RECAP_RE =
+  /\b(?:already|earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
+const _RF_CLAIM_MODAL_RE =
+  /\b(?:will|'ll|would|can|could|should|shall|once|when|if|want me to|let me know|make sure)\b|(?:会|将|可以|要不要|如果|一旦)/iu;
+const _RF_CLAIM_FRESH_MS = 15 * 60 * 1000;
+const _RF_NON_PERSIST_TOOLS = new Set([
+  "read",
+  "ls",
+  "glob",
+  "grep",
+  "web_search",
+  "web_fetch",
+  "memory_search",
+  "memory_get",
+  "meal_checkin",
+]);
+const _RF_NON_PERSIST_OUTCOMES = new Set(["none", "error", "ask"]);
+// Mirror of meal-tracker-v2 lib/turn-state.js turnBacksPersistClaim — keep in sync.
+function _rfTurnBacksClaim(state) {
+  if (!state) return true;
+  for (const t of state.tools || []) if (!_RF_NON_PERSIST_TOOLS.has(String(t))) return true;
+  for (const c of state.checkins || []) {
+    if (!_RF_NON_PERSIST_OUTCOMES.has(String(c && c.outcome))) return true;
+    if (c && c.save === "ok") return true;
+  }
+  return false;
+}
+function _rfIsBareClaim(sentence) {
+  return (
+    _RF_CLAIM_RE.test(sentence) &&
+    !_RF_CLAIM_NEG_RE.test(sentence) &&
+    !_RF_CLAIM_RECAP_RE.test(sentence) &&
+    !_RF_CLAIM_MODAL_RE.test(sentence)
+  );
+}
+function _rfPersistClaimGate(text, agentId, stats) {
+  try {
+    const reg = globalThis.__nrTurnState;
+    if (!(reg instanceof Map)) return text;
+    const state = reg.get(String(agentId));
+    if (
+      !state ||
+      typeof state.userAt !== "number" ||
+      Date.now() - state.userAt > _RF_CLAIM_FRESH_MS
+    )
+      return text;
+    if (!_RF_CLAIM_RE.test(text)) return text;
+    if (_rfTurnBacksClaim(state)) return text;
+    const removed = [];
+    const lines = text.split("\n").map((line) => {
+      if (!_RF_CLAIM_RE.test(line)) return line;
+      const parts = line.match(/[^.!?。!?]+[.!?。!?]*\s*/g) || [line];
+      const kept = parts.filter((s) => {
+        if (_rfIsBareClaim(s)) {
+          removed.push(s.trim());
+          return false;
+        }
+        return true;
+      });
+      return kept
+        .join("")
+        .replace(/^\s*[—–\-:,，:]\s*/, "")
+        .trim();
+    });
+    if (!removed.length) return text;
+    const zh = removed.some((s) => /[一-鿿]/.test(s));
+    const correction = zh
+      ? "更正——这条其实没有保存成功。再发一次,我马上记上。"
+      : "Correction — that didn't actually get saved on my end. Send it again and I'll log it properly.";
+    const rest = lines
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (stats) {
+      stats.pc = (stats.pc || 0) + removed.length;
+      stats.k.push({ y: "claim", p: removed[0].slice(0, 90) });
+    }
+    try {
+      console.log(
+        "[reply-filter] persist-claim corrected agent=" +
+          agentId +
+          " tools=" +
+          ((state.tools || []).join(",") || "-") +
+          " checkins=" +
+          JSON.stringify((state.checkins || []).map((c) => c.outcome + "/" + c.save)) +
+          " claim=" +
+          JSON.stringify(removed[0].slice(0, 120)),
+      );
+    } catch {}
+    return rest ? correction + "\n\n" + rest : correction;
+  } catch (e) {
+    try {
+      console.error("[reply-filter] persist-claim gate error:", e?.message?.slice(0, 120));
+    } catch {}
+    return text;
+  }
+}
 // ── v8 decision telemetry (fire-and-forget JSONL) ──
 // One line per filtered reply → ~/.openclaw/logs/reply-filter-decisions.jsonl.
 // This is the accuracy feedback loop: killed-paragraph previews for weekly FP
@@ -1092,6 +1212,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     ch: 0,
     lk: 0,
     lv: 0,
+    pc: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1106,6 +1227,13 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     _rfLogDecision(stats);
     return { drop, text: outText };
   };
+  // v22: persist-claim gate (dispatch only) — runs first so the correction line
+  // is ordinary coach copy for every later phase.
+  if (_rfPath !== "deliver" && filterCfg.persistClaimGate !== false) {
+    const _pre = text;
+    text = _rfPersistClaimGate(text, agentId, stats);
+    if (text !== _pre) stats.in = _pre.length;
+  }
   // Leaked [[directive]] routing tokens: strip the token, keep the line.
   if (text.includes("[[")) {
     const _pre = text;
