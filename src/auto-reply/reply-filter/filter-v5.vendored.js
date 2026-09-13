@@ -2,7 +2,20 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 22;
+const _REPLY_FILTER_HEADER_VERSION = 23;
+// v23 (2026-09-13, openclaw-infra#237 reopen): v22's gate corrected a REAL card
+// (060341 12:37Z, "Correction — … Send it again" on top of two rows that were
+// in the file) because the turn state it read was empty — meal-tracker-v2
+// keyed the turn start off the user message's session write, and this
+// runtime persists that message together with the tool calls at the END of
+// the turn, wiping the recorded meal_checkin. Three fixes: (1) the plugin now
+// opens the turn at before_prompt_build (before the model, before any tool);
+// (2) the gate has a hook-order-independent belt — any data file under the
+// agent workspace (data/meals, weight.json, exercise.json, habits.json,
+// streak.json) modified since the turn started counts as backing; (3) the
+// negation regex missed contractions ("I don't see eggs logged today" was
+// read as a claim) — any *n't now negates. The gate stays behind
+// {"persistClaimGate": false} until v23 is verified live.
 // v22 (2026-09-12, openclaw-infra#272): persist-claim gate. 050313 got "Got it —
 // logged 4 magnesium chews…" three nights out of six with ZERO bytes written:
 // twice the model never called meal_checkin, once it did and the engine
@@ -1009,7 +1022,7 @@ function _rfGateSkipLLM(p) {
 const _RF_CLAIM_RE =
   /\b(?:logged|saved|recorded|tracked|noted down|written down|added (?:it |that |them |those |this )?to (?:your|the) (?:log|diary|day|record|tally))\b|(?:记录好了|已记录|记下了|已经记|记上了|已保存|已登记|已加(?:上|入)?)/iu;
 const _RF_CLAIM_NEG_RE =
-  /\b(?:not|n't|never|didn'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|couldn'?t|can'?t|won'?t|nothing|without|un-?logged|unsaved)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
+  /\b\w+n'?t\b|\b(?:not|never|no|nothing|without|un-?logged|unsaved|missing|don't see|doesn't show)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
 const _RF_CLAIM_RECAP_RE =
   /\b(?:already|earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
 const _RF_CLAIM_MODAL_RE =
@@ -1045,7 +1058,47 @@ function _rfIsBareClaim(sentence) {
     !_RF_CLAIM_MODAL_RE.test(sentence)
   );
 }
-function _rfPersistClaimGate(text, agentId, stats) {
+// v23: hook-order-independent belt — did any member data file change since the
+// turn started? Workspace from cfg.agents.list (falls back to the SMS-line
+// layout). Any read error → "yes, it wrote" (never correct on a blind spot).
+const _RF_DATA_FILES = [
+  "data/weight.json",
+  "data/exercise.json",
+  "data/habits.json",
+  "data/streak.json",
+  "data/engagement.json",
+];
+function _rfWorkspaceWroteSince(cfg, agentId, sinceMs) {
+  try {
+    const home = process.env.HOME ?? "/root";
+    let ws = null;
+    const list = cfg && cfg.agents && Array.isArray(cfg.agents.list) ? cfg.agents.list : [];
+    const ent = list.find((a) => a && a.id === agentId);
+    if (ent && ent.workspace) ws = String(ent.workspace).replace(/^~(?=$|\/)/, home);
+    if (!ws) ws = home + "/.openclaw/workspace-nutritionist/" + agentId;
+    const since = sinceMs - 2000;
+    const newer = (p) => {
+      try {
+        return _replyFilterFs.statSync(p).mtimeMs >= since;
+      } catch {
+        return false;
+      }
+    };
+    for (const rel of _RF_DATA_FILES) if (newer(ws + "/" + rel)) return true;
+    const mealsDir = ws + "/data/meals";
+    let names = [];
+    try {
+      names = _replyFilterFs.readdirSync(mealsDir);
+    } catch {
+      names = [];
+    }
+    for (const n of names) if (n.endsWith(".json") && newer(mealsDir + "/" + n)) return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+function _rfPersistClaimGate(text, agentId, stats, cfg) {
   try {
     const reg = globalThis.__nrTurnState;
     if (!(reg instanceof Map)) return text;
@@ -1058,6 +1111,7 @@ function _rfPersistClaimGate(text, agentId, stats) {
       return text;
     if (!_RF_CLAIM_RE.test(text)) return text;
     if (_rfTurnBacksClaim(state)) return text;
+    if (_rfWorkspaceWroteSince(cfg, agentId, state.userAt)) return text;
     const removed = [];
     const lines = text.split("\n").map((line) => {
       if (!_RF_CLAIM_RE.test(line)) return line;
@@ -1231,7 +1285,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   // is ordinary coach copy for every later phase.
   if (_rfPath !== "deliver" && filterCfg.persistClaimGate !== false) {
     const _pre = text;
-    text = _rfPersistClaimGate(text, agentId, stats);
+    text = _rfPersistClaimGate(text, agentId, stats, cfg);
     if (text !== _pre) stats.in = _pre.length;
   }
   // Leaked [[directive]] routing tokens: strip the token, keep the line.
