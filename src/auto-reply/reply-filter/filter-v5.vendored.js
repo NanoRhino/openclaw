@@ -2,7 +2,18 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 23;
+const _REPLY_FILTER_HEADER_VERSION = 24;
+// v24 (2026-09-13, openclaw-infra#286): card reconciliation. The engine returns
+// the rendered meal (render.meals[]: slot, per-row grams/kcal, meal total) and
+// the coach composes the ①/② template from it — and sometimes from its own
+// head instead: 050306 got "📝 Snack logged!" with popcorn at 300 kcal while
+// the record it had just written said dinner / 316 (the day total on the same
+// card was right). meal-tracker-v2 now publishes that render in the turn
+// state; on the dispatch path a single-meal card whose title slot, row kcal /
+// grams or "🍽 This meal:" total disagree with the record is rewritten to the
+// record's numbers, in place, line by line — nothing is dropped, the tail
+// coaching stays. Decision log: stats.cc + {y:"card"}; journal
+// "[reply-filter] card reconciled".
 // v23 (2026-09-13, openclaw-infra#237 reopen): v22's gate corrected a REAL card
 // (060341 12:37Z, "Correction — … Send it again" on top of two rows that were
 // in the file) because the turn state it read was empty — meal-tracker-v2
@@ -1161,6 +1172,154 @@ function _rfPersistClaimGate(text, agentId, stats, cfg) {
     return text;
   }
 }
+// ── v24 card reconciliation (openclaw-infra#286) — see changelog ──
+const _RF_SLOT_WORDS = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack" };
+const _RF_CARD_TITLE_RE =
+  /^(\s*📝\s*)(Breakfast|Lunch|Dinner|Supper|Snack|早餐|午餐|晚餐|加餐)(\b[^\n]*?logged!?)/imu;
+const _RF_CARD_TOTAL_RE =
+  /^(\s*🍽\s*This (?:meal|snack|breakfast|lunch|dinner)\s*:\s*)(\d[\d,]*)(\s*kcal)/imu;
+const _RF_CARD_ROW_RE =
+  /^(\s*[·•]\s*)(.+?)(\s+[—–-]\s+)(\d[\d,]*)(\s*g\s+[—–-]\s+)(\d[\d,]*)(\s*kcal\b)/imu;
+const _rfNormName = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ")
+    .trim();
+function _rfRowMatch(name, dishes) {
+  const n = _rfNormName(name);
+  if (!n) return null;
+  let best = null,
+    bestScore = 0;
+  for (const d of dishes) {
+    const dn = _rfNormName(d.name);
+    if (!dn) continue;
+    let score = 0;
+    if (dn === n) score = 3;
+    else if (dn.includes(n) || n.includes(dn)) score = 2;
+    else {
+      const a = new Set(n.split(" ")),
+        b = new Set(dn.split(" "));
+      const inter = [...a].filter((w) => w.length > 2 && b.has(w)).length;
+      if (inter >= 1 && inter >= Math.min(a.size, b.size) / 2) score = 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = d;
+    }
+  }
+  return best;
+}
+function _rfLatestRender(state) {
+  for (let i = (state.checkins || []).length - 1; i >= 0; i--) {
+    const c = state.checkins[i];
+    if (
+      c &&
+      Array.isArray(c.render) &&
+      c.render.length === 1 &&
+      !_RF_NON_PERSIST_OUTCOMES.has(String(c.outcome))
+    )
+      return c.render[0];
+  }
+  return null;
+}
+function _rfCardReconcile(text, agentId, stats) {
+  try {
+    if (!/📝/u.test(text)) return text;
+    const reg = globalThis.__nrTurnState;
+    if (!(reg instanceof Map)) return text;
+    const state = reg.get(String(agentId));
+    if (
+      !state ||
+      typeof state.userAt !== "number" ||
+      Date.now() - state.userAt > _RF_CLAIM_FRESH_MS
+    )
+      return text;
+    const r = _rfLatestRender(state);
+    if (!r || !r.slot || !_RF_SLOT_WORDS[r.slot]) return text;
+    const fixes = [];
+    const lines = text.split("\n");
+    let titleSeen = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      let m = _RF_CARD_TITLE_RE.exec(line);
+      if (m && !titleSeen) {
+        titleSeen = true;
+        const want = _RF_SLOT_WORDS[r.slot];
+        const have = m[2];
+        const haveSlot = /^(?:supper|晚餐)$/iu.test(have)
+          ? "dinner"
+          : /^早餐$/u.test(have)
+            ? "breakfast"
+            : /^午餐$/u.test(have)
+              ? "lunch"
+              : /^加餐$/u.test(have)
+                ? "snack"
+                : have.toLowerCase();
+        if (haveSlot !== r.slot && !/[\u4e00-\u9fff]/u.test(have)) {
+          lines[i] = m[1] + want + m[3] + line.slice(m[0].length);
+          fixes.push("title " + have + "→" + want);
+        }
+        continue;
+      }
+      m = _RF_CARD_TOTAL_RE.exec(line);
+      if (m && r.total_kcal != null) {
+        const have = Number(m[2].replace(/,/g, ""));
+        if (have !== r.total_kcal) {
+          lines[i] = m[1] + String(r.total_kcal) + m[3] + line.slice(m[0].length);
+          fixes.push("total " + have + "→" + r.total_kcal);
+        }
+        continue;
+      }
+      m = _RF_CARD_ROW_RE.exec(line);
+      if (m && Array.isArray(r.dishes) && r.dishes.length) {
+        const d = _rfRowMatch(m[2], r.dishes);
+        if (!d) continue;
+        const haveG = Number(m[4].replace(/,/g, "")),
+          haveK = Number(m[6].replace(/,/g, ""));
+        const wantG = d.g != null ? d.g : haveG,
+          wantK = d.kcal != null ? d.kcal : haveK;
+        if (haveG !== wantG || haveK !== wantK) {
+          lines[i] =
+            m[1] +
+            m[2] +
+            m[3] +
+            String(wantG) +
+            m[5] +
+            String(wantK) +
+            m[7] +
+            line.slice(m[0].length);
+          fixes.push(
+            "row " +
+              m[2].trim().slice(0, 30) +
+              " " +
+              haveG +
+              "g/" +
+              haveK +
+              "→" +
+              wantG +
+              "g/" +
+              wantK,
+          );
+        }
+      }
+    }
+    if (!fixes.length) return text;
+    if (stats) {
+      stats.cc = (stats.cc || 0) + fixes.length;
+      stats.k.push({ y: "card", p: fixes.join("; ").slice(0, 90) });
+    }
+    try {
+      console.log("[reply-filter] card reconciled agent=" + agentId + " " + fixes.join("; "));
+    } catch {}
+    return lines.join("\n");
+  } catch (e) {
+    try {
+      console.error("[reply-filter] card reconcile error:", e?.message?.slice(0, 120));
+    } catch {}
+    return text;
+  }
+}
 // ── v8 decision telemetry (fire-and-forget JSONL) ──
 // One line per filtered reply → ~/.openclaw/logs/reply-filter-decisions.jsonl.
 // This is the accuracy feedback loop: killed-paragraph previews for weekly FP
@@ -1267,6 +1426,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     lk: 0,
     lv: 0,
     pc: 0,
+    cc: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1287,6 +1447,11 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     const _pre = text;
     text = _rfPersistClaimGate(text, agentId, stats, cfg);
     if (text !== _pre) stats.in = _pre.length;
+  }
+  // v24: card reconciliation (dispatch only) — the record's slot and numbers
+  // win over the coach's retelling of them.
+  if (_rfPath !== "deliver" && filterCfg.cardReconcile !== false) {
+    text = _rfCardReconcile(text, agentId, stats);
   }
   // Leaked [[directive]] routing tokens: strip the token, keep the line.
   if (text.includes("[[")) {
