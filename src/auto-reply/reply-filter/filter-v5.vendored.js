@@ -2,7 +2,23 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 24;
+const _REPLY_FILTER_HEADER_VERSION = 25;
+// v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
+// (a) "Got it — logging the same plate for dinner too. Just to confirm: full
+//     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
+//     nothing, the sentence says the write is happening. Present-progressive
+//     claims at the head of a sentence now count as claims; and on a turn
+//     whose meal_checkin outcome was `ask`, the claim verbs are rewritten to
+//     intent ("I'll log …") instead of the "Correction — send it again" line —
+//     the user should answer the question, not resend. {y:"claim-ask"}.
+// (b) 050184 got alcohol tips/nudges three times in eight days while
+//     health-preferences.md said "Does not drink alcohol" (twice), the third
+//     time answered "I DON'T DRINK". The deliver path (cron nudges, announce)
+//     now drops a paragraph about alcohol when the workspace preference files
+//     say the member does not drink, and a paragraph about the scale when the
+//     files say recovery mode / zero scale pressure / avoid_weight_focus.
+//     Dispatch (interactive) replies are untouched — a member asking about wine
+//     gets an answer. {y:"pref"}, stats.pf; cached per agent for 10 min.
 // v24 (2026-09-13, openclaw-infra#286): card reconciliation. The engine returns
 // the rendered meal (render.meals[]: slot, per-row grams/kcal, meal total) and
 // the coach composes the ①/② template from it — and sometimes from its own
@@ -1031,7 +1047,19 @@ function _rfGateSkipLLM(p) {
 }
 // ── v22 persist-claim gate (openclaw-infra#272) — see changelog ──
 const _RF_CLAIM_RE =
-  /\b(?:logged|saved|recorded|tracked|noted down|written down|added (?:it |that |them |those |this )?to (?:your|the) (?:log|diary|day|record|tally))\b|(?:记录好了|已记录|记下了|已经记|记上了|已保存|已登记|已加(?:上|入)?)/iu;
+  /\b(?:logged|saved|recorded|tracked|noted down|written down|added (?:it |that |them |those |this )?to (?:your|the) (?:log|diary|day|record|tally))\b|^\s*(?:(?:got it|ok(?:ay)?|alright|sure|noted|on it)\s*[—–\-:,，]?\s*)?(?:logging|saving|recording|adding)\b|(?:记录好了|已记录|记下了|已经记|记上了|已保存|已登记|已加(?:上|入)?)/iu;
+// v25: on an `ask` turn the claim verbs become intent, sentence kept.
+const _RF_CLAIM_VERB_RE = /\b(logging|logged|saving|saved|recording|recorded|adding|added)\b/giu;
+const _RF_CLAIM_INTENT = {
+  logging: "I'll log",
+  logged: "I'll log",
+  saving: "I'll save",
+  saved: "I'll save",
+  recording: "I'll record",
+  recorded: "I'll record",
+  adding: "I'll add",
+  added: "I'll add",
+};
 const _RF_CLAIM_NEG_RE =
   /\b\w+n'?t\b|\b(?:not|never|no|nothing|without|un-?logged|unsaved|missing|don't see|doesn't show)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
 const _RF_CLAIM_RECAP_RE =
@@ -1123,6 +1151,42 @@ function _rfPersistClaimGate(text, agentId, stats, cfg) {
     if (!_RF_CLAIM_RE.test(text)) return text;
     if (_rfTurnBacksClaim(state)) return text;
     if (_rfWorkspaceWroteSince(cfg, agentId, state.userAt)) return text;
+    // v25: the engine asked a question this turn — the claim is premature,
+    // not false. Rewrite the verbs to intent and keep the question intact.
+    const askedTurn = (state.checkins || []).some((c) => c && String(c.outcome) === "ask");
+    if (askedTurn) {
+      let n = 0;
+      const out = text
+        .split("\n")
+        .map((line) => {
+          if (!_RF_CLAIM_RE.test(line)) return line;
+          const parts = line.match(/[^.!?。!?]+[.!?。!?]*\s*/g) || [line];
+          return parts
+            .map((sen) => {
+              if (!_rfIsBareClaim(sen)) return sen;
+              return sen.replace(_RF_CLAIM_VERB_RE, (m) => {
+                n++;
+                const r = _RF_CLAIM_INTENT[m.toLowerCase()];
+                return r ? (m[0] === m[0].toUpperCase() ? r[0].toUpperCase() + r.slice(1) : r) : m;
+              });
+            })
+            .join("");
+        })
+        .join("\n");
+      if (n && out !== text) {
+        if (stats) {
+          stats.pc = (stats.pc || 0) + n;
+          stats.k.push({ y: "claim-ask", p: text.slice(0, 90) });
+        }
+        try {
+          console.log(
+            "[reply-filter] persist-claim softened (ask turn) agent=" + agentId + " verbs=" + n,
+          );
+        } catch {}
+        return out;
+      }
+      return text;
+    }
     const removed = [];
     const lines = text.split("\n").map((line) => {
       if (!_RF_CLAIM_RE.test(line)) return line;
@@ -1171,6 +1235,52 @@ function _rfPersistClaimGate(text, agentId, stats, cfg) {
     } catch {}
     return text;
   }
+}
+// ── v25 preference belt for the deliver path (openclaw-infra#250) ──
+const _RF_PREF_NO_ALCOHOL_RE =
+  /\b(?:does(?:n'?t| not) drink|don'?t drink|not drink(?:ing)?|no alcohol|alcohol[- ]free|sober|recovering alcoholic|teetotal)\b|禁酒|不喝酒|戒酒|滴酒不沾/iu;
+const _RF_PREF_NO_SCALE_RE =
+  /\b(?:recovery mode|zero scale pressure|no scale pressure|avoid_weight_focus|history_of_ed|do not (?:push|mention) (?:the )?scale|skip (?:the )?scale)\b|不称重|不要提体重/iu;
+const _RF_ALCOHOL_PARA_RE =
+  /\b(?:alcohol(?:ic)?|wine|beer|cocktails?|liquor|vodka|whisk(?:e)?y|tequila|margaritas?|a drink or two|drinks? (?:count|loosen|add up|carr(?:y|ies)))\b|(?:酒|饮酒)/iu;
+const _RF_SCALE_PARA_RE =
+  /\b(?:the scale|weigh(?:-?ins?|ing)?|weigh yourself|step on)\b|称重|上秤/iu;
+const _RF_PREF_TTL_MS = 10 * 60 * 1000;
+const _rfPrefCache = new Map();
+function _rfWorkspaceDir(cfg, agentId) {
+  const home = process.env.HOME ?? "/root";
+  const list = cfg && cfg.agents && Array.isArray(cfg.agents.list) ? cfg.agents.list : [];
+  const ent = list.find((a) => a && a.id === agentId);
+  if (ent && ent.workspace) return String(ent.workspace).replace(/^~(?=$|\/)/, home);
+  return home + "/.openclaw/workspace-nutritionist/" + agentId;
+}
+function _rfPrefExclusions(cfg, agentId) {
+  try {
+    const now = Date.now();
+    const hit = _rfPrefCache.get(agentId);
+    if (hit && now - hit.at < _RF_PREF_TTL_MS) return hit.ex;
+    const ws = _rfWorkspaceDir(cfg, agentId);
+    let blob = "";
+    for (const f of ["health-preferences.md", "USER.md", "MEMORY.md", "health-profile.md"]) {
+      try {
+        blob += "\n" + _replyFilterFs.readFileSync(ws + "/" + f, "utf8");
+      } catch {}
+    }
+    const ex = new Set();
+    if (_RF_PREF_NO_ALCOHOL_RE.test(blob)) ex.add("alcohol");
+    if (_RF_PREF_NO_SCALE_RE.test(blob)) ex.add("scale");
+    if (_rfPrefCache.size > 1000) _rfPrefCache.clear();
+    _rfPrefCache.set(agentId, { at: now, ex });
+    return ex;
+  } catch {
+    return new Set();
+  }
+}
+function _rfPrefParaBlocked(p, ex) {
+  if (!ex || !ex.size) return null;
+  if (ex.has("alcohol") && _RF_ALCOHOL_PARA_RE.test(p)) return "alcohol";
+  if (ex.has("scale") && _RF_SCALE_PARA_RE.test(p)) return "scale";
+  return null;
 }
 // ── v24 card reconciliation (openclaw-infra#286) — see changelog ──
 const _RF_SLOT_WORDS = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack" };
@@ -1427,6 +1537,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     lv: 0,
     pc: 0,
     cc: 0,
+    pf: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1496,9 +1607,28 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   stats.n = paragraphs.length;
   // First-party URL paragraphs (report/plan/CTA links) are exempt from BOTH
   // phases — keep them verbatim regardless of regex/LLM verdict.
+  // v25 (#250): deliver-path preference belt — never push alcohol / scale copy
+  // at a member whose files say not to.
+  const _prefEx =
+    _rfPath === "deliver" && filterCfg.preferenceBelt !== false
+      ? _rfPrefExclusions(cfg, agentId)
+      : null;
   const afterRegex = _dedupParagraphs(
     paragraphs.filter((p) => {
       if (_isUserFacingUrlPara(p)) return true;
+      if (_prefEx && _prefEx.size) {
+        const why = _rfPrefParaBlocked(p, _prefEx);
+        if (why) {
+          stats.pf = (stats.pf || 0) + 1;
+          stats.k.push({ y: "pref", p: why + ": " + p.trim().slice(0, 80) });
+          try {
+            console.log(
+              "[reply-filter] preference belt dropped a " + why + " paragraph agent=" + agentId,
+            );
+          } catch {}
+          return false;
+        }
+      }
       if (_fastReject(p.trim())) {
         stats.rk++;
         stats.k.push({ y: "rx", p: p.trim().slice(0, 90) });
