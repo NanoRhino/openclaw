@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 27;
+const _REPLY_FILTER_HEADER_VERSION = 28;
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1559,6 +1559,75 @@ function _rfAlertFailClosed(agentId, n) {
 // classify failure, longer timeout) | anything else = interactive dispatch
 // semantics (fail-open). The deliver chokepoint passes the hint; the dispatch
 // chokepoints stay 3-arg on purpose.
+// v28 (#301, 050025 2026-09-15): two dinner-reminder crons 2 minutes apart in
+// the same direct session — the second one's model copied the first one's
+// text verbatim, and the user got the same nudge twice (two Twilio SIDs) as
+// the "reply" to his answer. Deliver path only (cron/announce output): a
+// payload identical to a body this agent already sent in the last 30 minutes
+// is dropped. The record is the agent's own outbound.jsonl (last 64 KB).
+const _RF_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
+function _rfNormBody(t) {
+  return String(t || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+function _rfDeliverDedupe(text, agentId, stats) {
+  try {
+    const norm = _rfNormBody(text);
+    if (norm.length < 20) return false;
+    const p = (process.env.HOME ?? "/root") + "/.openclaw/agents/" + agentId + "/outbound.jsonl";
+    let st;
+    try {
+      st = _replyFilterFs.statSync(p);
+    } catch {
+      return false;
+    }
+    const size = st.size,
+      start = Math.max(0, size - 65536);
+    const fd = _replyFilterFs.openSync(p, "r");
+    let buf;
+    try {
+      buf = Buffer.alloc(size - start);
+      _replyFilterFs.readSync(fd, buf, 0, size - start, start);
+    } finally {
+      _replyFilterFs.closeSync(fd);
+    }
+    const now = Date.now();
+    const lines = buf.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const l = lines[i].trim();
+      if (!l.startsWith("{")) continue;
+      let rec;
+      try {
+        rec = JSON.parse(l);
+      } catch {
+        continue;
+      }
+      const ts = Date.parse(rec.ts || "");
+      if (Number.isFinite(ts) && now - ts > _RF_DEDUPE_WINDOW_MS) break;
+      if (rec.kind && rec.kind !== "text") continue;
+      if (_rfNormBody(rec.body) === norm) {
+        if (stats) {
+          stats.dd = (stats.dd || 0) + 1;
+          stats.k.push({ y: "dedupe", p: text.slice(0, 90) });
+        }
+        try {
+          console.log(
+            "[reply-filter] deliver dedupe: identical to a body sent " +
+              Math.round((now - ts) / 1000) +
+              " s ago agent=" +
+              agentId,
+          );
+        } catch {}
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 async function _filterReplyText(text, cfg, sessionKey, opts) {
   const _t0 = Date.now();
   const _rfPath = opts && opts.path === "deliver" ? "deliver" : "dispatch";
@@ -1594,6 +1663,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     cc: 0,
     pf: 0,
     wd: 0,
+    dd: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1608,6 +1678,15 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     _rfLogDecision(stats);
     return { drop, text: outText };
   };
+  // v28: deliver-path dedupe — a proactive payload identical to something this
+  // agent sent in the last 30 min is dropped outright (#301).
+  if (
+    _rfPath === "deliver" &&
+    filterCfg.deliverDedupe !== false &&
+    _rfDeliverDedupe(text, agentId, stats)
+  ) {
+    return _done(true, "");
+  }
   // v22: persist-claim gate (dispatch only) — runs first so the correction line
   // is ordinary coach copy for every later phase.
   if (_rfPath !== "deliver" && filterCfg.persistClaimGate !== false) {
