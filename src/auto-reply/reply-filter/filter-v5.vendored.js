@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 26;
+const _REPLY_FILTER_HEADER_VERSION = 27;
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1333,6 +1333,41 @@ function _rfLatestRender(state) {
   }
   return null;
 }
+// v27 (#303, 050298 2026-09-15): "212 down to 213 — that's -1 lb since
+// yesterday" — the verdict and the delta were right, the two readings were
+// written in the wrong order. Deterministic: when "A down to B" has B > A (or
+// "A up to B" has B < A) the numbers are swapped; the direction word is the
+// engine's verdict and stays. Same-number pairs and non-numeric text untouched.
+const _RF_WEIGH_DIR_RE =
+  /\b(\d{2,3}(?:\.\d)?)(\s*(?:lb|lbs|kg)?\s+)(down|up)(\s+to\s+)(\d{2,3}(?:\.\d)?)(\s*(?:lb|lbs|kg)?)\b/giu;
+function _rfWeighDirectionFix(text, agentId, stats) {
+  try {
+    if (!/\b(?:down|up) to\b/iu.test(text)) return text;
+    let n = 0;
+    const out = text.replace(_RF_WEIGH_DIR_RE, (m, a, sp1, dir, sp2, b, sp3) => {
+      const av = Number(a),
+        bv = Number(b);
+      if (!Number.isFinite(av) || !Number.isFinite(bv) || av === bv) return m;
+      const wrong =
+        (dir.toLowerCase() === "down" && bv > av) || (dir.toLowerCase() === "up" && bv < av);
+      if (!wrong) return m;
+      n++;
+      return b + sp1 + dir + sp2 + a + sp3;
+    });
+    if (n && stats) {
+      stats.wd = (stats.wd || 0) + n;
+      stats.k.push({ y: "weigh-dir", p: text.slice(0, 90) });
+    }
+    if (n) {
+      try {
+        console.log("[reply-filter] weigh-in direction fixed agent=" + agentId + " n=" + n);
+      } catch {}
+    }
+    return out;
+  } catch {
+    return text;
+  }
+}
 function _rfCardReconcile(text, agentId, stats) {
   try {
     if (!/📝/u.test(text)) return text;
@@ -1558,6 +1593,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     pc: 0,
     cc: 0,
     pf: 0,
+    wd: 0,
     to: 0,
     rt: 0,
     fc: 0,
@@ -1583,6 +1619,10 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   // win over the coach's retelling of them.
   if (_rfPath !== "deliver" && filterCfg.cardReconcile !== false) {
     text = _rfCardReconcile(text, agentId, stats);
+  }
+  // v27: weigh-in "A down to B" with B > A → numbers swapped (verdict stays).
+  if (filterCfg.weighDirectionFix !== false) {
+    text = _rfWeighDirectionFix(text, agentId, stats);
   }
   // Leaked [[directive]] routing tokens: strip the token, keep the line.
   if (text.includes("[[")) {
