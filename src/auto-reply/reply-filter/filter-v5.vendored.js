@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 25;
+const _REPLY_FILTER_HEADER_VERSION = 26;
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1350,6 +1350,26 @@ function _rfCardReconcile(text, agentId, stats) {
     const fixes = [];
     const lines = text.split("\n");
     let titleSeen = false;
+    // v26 (#300, 050225 2026-09-14): a render that carries FEWER rows than
+    // the card lists is a partial record (an append's own rows, not the
+    // whole meal) — its total is a delta, and "fixing" the coach's whole-meal
+    // total to it produced "🍽 This meal: 1 kcal" over a 160 kcal shake.
+    // Numbers are only reconciled when the render covers the whole card.
+    const cardRows = lines.filter((l) => _RF_CARD_ROW_RE.test(l)).length;
+    const renderRows = Array.isArray(r.dishes) ? r.dishes.length : 0;
+    const numbersOk = renderRows > 0 && cardRows <= renderRows;
+    if (!numbersOk) {
+      try {
+        console.log(
+          "[reply-filter] card reconcile: partial render (" +
+            renderRows +
+            " rows vs " +
+            cardRows +
+            " on the card) — slot only agent=" +
+            agentId,
+        );
+      } catch {}
+    }
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       let m = _RF_CARD_TITLE_RE.exec(line);
@@ -1373,7 +1393,7 @@ function _rfCardReconcile(text, agentId, stats) {
         continue;
       }
       m = _RF_CARD_TOTAL_RE.exec(line);
-      if (m && r.total_kcal != null) {
+      if (m && r.total_kcal != null && numbersOk) {
         const have = Number(m[2].replace(/,/g, ""));
         if (have !== r.total_kcal) {
           lines[i] = m[1] + String(r.total_kcal) + m[3] + line.slice(m[0].length);
@@ -1382,7 +1402,7 @@ function _rfCardReconcile(text, agentId, stats) {
         continue;
       }
       m = _RF_CARD_ROW_RE.exec(line);
-      if (m && Array.isArray(r.dishes) && r.dishes.length) {
+      if (m && numbersOk) {
         const d = _rfRowMatch(m[2], r.dishes);
         if (!d) continue;
         const haveG = Number(m[4].replace(/,/g, "")),
