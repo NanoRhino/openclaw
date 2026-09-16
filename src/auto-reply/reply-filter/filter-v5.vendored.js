@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 28;
+const _REPLY_FILTER_HEADER_VERSION = 29;
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1062,8 +1062,11 @@ const _RF_CLAIM_INTENT = {
 };
 const _RF_CLAIM_NEG_RE =
   /\b\w+n'?t\b|\b(?:not|never|no|nothing|without|un-?logged|unsaved|missing|don't see|doesn't show)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
+// v29: "locked in / marked / counts as logged" describes the record's state
+// (050269 2026-09-16: "Breakfast's locked in as logged." answering the
+// coach's own clarification question) — a recap, never a fresh claim.
 const _RF_CLAIM_RECAP_RE =
-  /\b(?:already|earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
+  /\b(?:already|earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|\b(?:locked in|marked|counts?|shows?|stays?|remains?|still|sits?|sitting|stands?) as (?:logged|saved|recorded|tracked)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
 const _RF_CLAIM_MODAL_RE =
   /\b(?:will|'ll|would|can|could|should|shall|once|when|if|want me to|let me know|make sure)\b|(?:会|将|可以|要不要|如果|一旦)/iu;
 const _RF_CLAIM_FRESH_MS = 15 * 60 * 1000;
@@ -1107,37 +1110,228 @@ const _RF_DATA_FILES = [
   "data/streak.json",
   "data/engagement.json",
 ];
-function _rfWorkspaceWroteSince(cfg, agentId, sinceMs) {
+function _rfAgentWorkspace(cfg, agentId) {
+  const home = process.env.HOME ?? "/root";
+  const list = cfg && cfg.agents && Array.isArray(cfg.agents.list) ? cfg.agents.list : [];
+  const ent = list.find((a) => a && a.id === agentId);
+  if (ent && ent.workspace) return String(ent.workspace).replace(/^~(?=$|\/)/, home);
+  return home + "/.openclaw/workspace-nutritionist/" + agentId;
+}
+// v29: the channel's own inbound stamp (twilio inbound-stamp.ts writes
+// channel-source.json lastInboundAt, epoch ms, on every inbound) — ground
+// truth for "when did this turn start" that no turn-state reset can move.
+function _rfLastInboundMs(ws) {
   try {
-    const home = process.env.HOME ?? "/root";
-    let ws = null;
-    const list = cfg && cfg.agents && Array.isArray(cfg.agents.list) ? cfg.agents.list : [];
-    const ent = list.find((a) => a && a.id === agentId);
-    if (ent && ent.workspace) ws = String(ent.workspace).replace(/^~(?=$|\/)/, home);
-    if (!ws) ws = home + "/.openclaw/workspace-nutritionist/" + agentId;
-    const since = sinceMs - 2000;
-    const newer = (p) => {
-      try {
-        return _replyFilterFs.statSync(p).mtimeMs >= since;
-      } catch {
-        return false;
-      }
-    };
-    for (const rel of _RF_DATA_FILES) if (newer(ws + "/" + rel)) return true;
-    const mealsDir = ws + "/data/meals";
-    let names = [];
-    try {
-      names = _replyFilterFs.readdirSync(mealsDir);
-    } catch {
-      names = [];
+    const cs = JSON.parse(_replyFilterFs.readFileSync(ws + "/channel-source.json", "utf-8"));
+    const raw = cs && typeof cs === "object" ? cs.lastInboundAt : null;
+    if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
+    if (typeof raw === "string") {
+      const n = Date.parse(raw);
+      return Number.isFinite(n) ? n : null;
     }
-    for (const n of names) if (n.endsWith(".json") && newer(mealsDir + "/" + n)) return true;
-    return false;
+    return null;
   } catch {
-    return true;
+    return null;
   }
 }
-function _rfPersistClaimGate(text, agentId, stats, cfg) {
+// Newest mtime among the member data files in [sinceMs-2s, untilMs+2s]; null
+// when nothing in that window. untilMs=null → open-ended.
+function _rfWorkspaceWriteIn(ws, sinceMs, untilMs) {
+  const lo = sinceMs - 2000;
+  const hi = untilMs == null ? Infinity : untilMs + 2000;
+  let hit = null;
+  const probe = (p) => {
+    try {
+      const m = _replyFilterFs.statSync(p).mtimeMs;
+      if (m >= lo && m <= hi && (hit == null || m > hit)) hit = m;
+    } catch {}
+  };
+  for (const rel of _RF_DATA_FILES) probe(ws + "/" + rel);
+  const mealsDir = ws + "/data/meals";
+  let names = [];
+  try {
+    names = _replyFilterFs.readdirSync(mealsDir);
+  } catch {
+    names = [];
+  }
+  for (const n of names) if (n.endsWith(".json")) probe(mealsDir + "/" + n);
+  return hit;
+}
+// Did any member data file change since the turn started? `sinceMs` is the
+// EARLIER of the turn state's userAt and the channel inbound stamp (v29), so
+// a turn-state reset that moved userAt past the file's mtime (#304's shape)
+// no longer blinds the belt. `blind` is the answer on a read surprise —
+// true for the gate (never correct on a blind spot), false for the canary.
+function _rfWorkspaceWroteSince(cfg, agentId, sinceMs, blind = true) {
+  try {
+    const ws = _rfAgentWorkspace(cfg, agentId);
+    const inbound = _rfLastInboundMs(ws);
+    const since = inbound != null && inbound < sinceMs ? inbound : sinceMs;
+    return _rfWorkspaceWriteIn(ws, since, null) != null;
+  } catch {
+    return blind;
+  }
+}
+// v29 (2026-09-16, openclaw-infra#313): fail-open evidence classes. Three
+// days of v22–v25 produced 11 corrections on 7 members and every one was
+// false — the record was on disk, the turn state was empty (#237 hook
+// order, #304 final-tag rebuild, and on 09-16 050269 a plain confirmation
+// turn: "Yes" to the coach's own "did you mean walnut halves?" → zero tools,
+// zero checkins, "Breakfast's locked in as logged." rewritten into "Send it
+// again"). An empty turn state is ABSENCE of evidence, not evidence of
+// absence. From v29 the gate sorts an unbacked claim into:
+//   refuted  — meal_checkin RAN this turn and every outcome was none/error
+//              (and the workspace agrees): the engine said no while the coach
+//              said logged → the correction line, the only path that still
+//              asserts "didn't get saved" (050313 09-07: action:none).
+//   unbacked — nothing ran at all: no evidence either way → the text passes
+//              untouched, decision {y:"claim-unbacked"} / stats.pu / journal
+//              "persist-claim unbacked (passed)" keeps the class visible.
+//              {"persistClaimUnbackedMode":"soften"} applies the v25 intent
+//              rewrite ("I'll log …") instead — never the correction.
+// Every correction schedules a CANARY (below): a member data file written
+// between the inbound stamp and the correction = the correction was false →
+// alert (critical → owner SMS via the alert proxy) + persistClaimGate flipped
+// off in reply-filter.json. v22→first human notice took 32 h and 7 members.
+const _RF_CLAIM_CANARY_MS = 60 * 1000;
+function _rfAlert(payload) {
+  try {
+    fetch("http://127.0.0.1:9876/wecom-alert", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  } catch {}
+}
+function _rfDisablePersistClaimGate(reason) {
+  try {
+    if (!_replyFilterFs) return false;
+    const cfgPath = (process.env.HOME ?? "/root") + "/.openclaw/reply-filter.json";
+    let cur = {};
+    try {
+      cur = JSON.parse(_replyFilterFs.readFileSync(cfgPath, "utf-8")) || {};
+    } catch {
+      cur = {};
+    }
+    if (cur.persistClaimGate === false) return true;
+    cur.persistClaimGate = false;
+    cur.persistClaimGateDisabledAt = new Date().toISOString();
+    cur.persistClaimGateDisabledBy = reason;
+    const tmp = cfgPath + ".tmp-" + process.pid;
+    _replyFilterFs.writeFileSync(tmp, JSON.stringify(cur, null, 2) + "\n");
+    _replyFilterFs.renameSync(tmp, cfgPath);
+    return true;
+  } catch (e) {
+    try {
+      console.error(
+        "[reply-filter] persist-claim canary: could not disable gate:",
+        e?.message?.slice(0, 120),
+      );
+    } catch {}
+    return false;
+  }
+}
+function _rfPersistClaimCanary(cfg, filterCfg, agentId, sinceMs, claimPreview) {
+  try {
+    if (filterCfg && filterCfg.persistClaimCanary === false) return;
+    const delay =
+      filterCfg && Number.isFinite(Number(filterCfg.persistClaimCanaryMs))
+        ? Math.max(0, Number(filterCfg.persistClaimCanaryMs))
+        : _RF_CLAIM_CANARY_MS;
+    const correctedAt = Date.now();
+    const t = setTimeout(() => {
+      try {
+        const ws = _rfAgentWorkspace(cfg, agentId);
+        const inbound = _rfLastInboundMs(ws);
+        const since = inbound != null && inbound < sinceMs ? inbound : sinceMs;
+        const hit = _rfWorkspaceWriteIn(ws, since, correctedAt);
+        if (hit == null) {
+          try {
+            console.log(
+              "[reply-filter] persist-claim canary ok agent=" +
+                agentId +
+                " (no data write in window)",
+            );
+          } catch {}
+          return;
+        }
+        const disabled = _rfDisablePersistClaimGate(
+          "canary agent=" + agentId + " " + new Date(correctedAt).toISOString(),
+        );
+        try {
+          console.error(
+            "[reply-filter] persist-claim CANARY: false correction agent=" +
+              agentId +
+              " data written " +
+              new Date(hit).toISOString() +
+              " (inbound " +
+              new Date(since).toISOString() +
+              ", corrected " +
+              new Date(correctedAt).toISOString() +
+              ") claim=" +
+              JSON.stringify(String(claimPreview || "").slice(0, 120)) +
+              " gate " +
+              (disabled ? "DISABLED" : "still on (disable failed)"),
+          );
+        } catch {}
+        _rfAlert({
+          jobId: "reply-filter-canary",
+          jobName: "persist-claim false correction",
+          alertType: "critical",
+          message:
+            "🔴 persist-claim 误纠正 agent=" +
+            agentId +
+            " claim=" +
+            JSON.stringify(String(claimPreview || "").slice(0, 80)) +
+            " — 数据文件 " +
+            new Date(hit).toISOString() +
+            " 已写入(收件 " +
+            new Date(since).toISOString() +
+            ",纠正 " +
+            new Date(correctedAt).toISOString() +
+            ")。persistClaimGate " +
+            (disabled ? "已自动关闭" : "关闭失败,请手动关") +
+            "(reply-filter.json)。infra#313",
+        });
+      } catch (e) {
+        try {
+          console.error("[reply-filter] persist-claim canary error:", e?.message?.slice(0, 120));
+        } catch {}
+      }
+    }, delay);
+    if (t && typeof t.unref === "function") t.unref();
+  } catch {}
+}
+function _rfHasBareClaim(text) {
+  for (const line of text.split("\n")) {
+    if (!_RF_CLAIM_RE.test(line)) continue;
+    for (const sen of line.match(/[^.!?。!?]+[.!?。!?]*\s*/g) || [line])
+      if (_rfIsBareClaim(sen)) return true;
+  }
+  return false;
+}
+function _rfSoftenClaimVerbs(text) {
+  let n = 0;
+  const out = text
+    .split("\n")
+    .map((line) => {
+      if (!_RF_CLAIM_RE.test(line)) return line;
+      const parts = line.match(/[^.!?。!?]+[.!?。!?]*\s*/g) || [line];
+      return parts
+        .map((sen) => {
+          if (!_rfIsBareClaim(sen)) return sen;
+          return sen.replace(_RF_CLAIM_VERB_RE, (m) => {
+            n++;
+            const r = _RF_CLAIM_INTENT[m.toLowerCase()];
+            return r ? (m[0] === m[0].toUpperCase() ? r[0].toUpperCase() + r.slice(1) : r) : m;
+          });
+        })
+        .join("");
+    })
+    .join("\n");
+  return { out, n };
+}
+function _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg) {
   try {
     const reg = globalThis.__nrTurnState;
     if (!(reg instanceof Map)) return text;
@@ -1151,42 +1345,55 @@ function _rfPersistClaimGate(text, agentId, stats, cfg) {
     if (!_RF_CLAIM_RE.test(text)) return text;
     if (_rfTurnBacksClaim(state)) return text;
     if (_rfWorkspaceWroteSince(cfg, agentId, state.userAt)) return text;
+    const checkins = state.checkins || [];
     // v25: the engine asked a question this turn — the claim is premature,
     // not false. Rewrite the verbs to intent and keep the question intact.
-    const askedTurn = (state.checkins || []).some((c) => c && String(c.outcome) === "ask");
-    if (askedTurn) {
-      let n = 0;
-      const out = text
-        .split("\n")
-        .map((line) => {
-          if (!_RF_CLAIM_RE.test(line)) return line;
-          const parts = line.match(/[^.!?。!?]+[.!?。!?]*\s*/g) || [line];
-          return parts
-            .map((sen) => {
-              if (!_rfIsBareClaim(sen)) return sen;
-              return sen.replace(_RF_CLAIM_VERB_RE, (m) => {
-                n++;
-                const r = _RF_CLAIM_INTENT[m.toLowerCase()];
-                return r ? (m[0] === m[0].toUpperCase() ? r[0].toUpperCase() + r.slice(1) : r) : m;
-              });
-            })
-            .join("");
-        })
-        .join("\n");
-      if (n && out !== text) {
+    const askedTurn = checkins.some((c) => c && String(c.outcome) === "ask");
+    // v29: nothing ran → no evidence either way → pass (or soften), never correct.
+    const unbacked = !askedTurn && checkins.length === 0;
+    if (askedTurn || unbacked) {
+      const soften = askedTurn || (filterCfg && filterCfg.persistClaimUnbackedMode === "soften");
+      if (!soften) {
+        // telemetry only for a real bare claim (negated / recap / modal sentences are not claims)
+        if (!_rfHasBareClaim(text)) return text;
         if (stats) {
-          stats.pc = (stats.pc || 0) + n;
-          stats.k.push({ y: "claim-ask", p: text.slice(0, 90) });
+          stats.pu = (stats.pu || 0) + 1;
+          stats.k.push({ y: "claim-unbacked", p: text.slice(0, 90) });
         }
         try {
           console.log(
-            "[reply-filter] persist-claim softened (ask turn) agent=" + agentId + " verbs=" + n,
+            "[reply-filter] persist-claim unbacked (passed) agent=" +
+              agentId +
+              " tools=" +
+              ((state.tools || []).join(",") || "-") +
+              " text=" +
+              JSON.stringify(text.slice(0, 100)),
+          );
+        } catch {}
+        return text;
+      }
+      const { out, n } = _rfSoftenClaimVerbs(text);
+      if (n && out !== text) {
+        if (stats) {
+          stats.pc = (stats.pc || 0) + n;
+          stats.k.push({ y: askedTurn ? "claim-ask" : "claim-soft", p: text.slice(0, 90) });
+        }
+        try {
+          console.log(
+            "[reply-filter] persist-claim softened (" +
+              (askedTurn ? "ask turn" : "no evidence") +
+              ") agent=" +
+              agentId +
+              " verbs=" +
+              n,
           );
         } catch {}
         return out;
       }
       return text;
     }
+    // refuted: meal_checkin ran and persisted nothing (none/error), the
+    // workspace agrees — the only path that asserts "didn't get saved".
     const removed = [];
     const lines = text.split("\n").map((line) => {
       if (!_RF_CLAIM_RE.test(line)) return line;
@@ -1228,6 +1435,7 @@ function _rfPersistClaimGate(text, agentId, stats, cfg) {
           JSON.stringify(removed[0].slice(0, 120)),
       );
     } catch {}
+    _rfPersistClaimCanary(cfg, filterCfg, agentId, state.userAt, removed[0]);
     return rest ? correction + "\n\n" + rest : correction;
   } catch (e) {
     try {
@@ -1660,6 +1868,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     lk: 0,
     lv: 0,
     pc: 0,
+    pu: 0,
     cc: 0,
     pf: 0,
     wd: 0,
@@ -1691,7 +1900,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   // is ordinary coach copy for every later phase.
   if (_rfPath !== "deliver" && filterCfg.persistClaimGate !== false) {
     const _pre = text;
-    text = _rfPersistClaimGate(text, agentId, stats, cfg);
+    text = _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg);
     if (text !== _pre) stats.in = _pre.length;
   }
   // v24: card reconciliation (dispatch only) — the record's slot and numbers
