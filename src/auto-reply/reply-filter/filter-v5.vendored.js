@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 29;
+const _REPLY_FILTER_HEADER_VERSION = 30;
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1494,8 +1494,9 @@ function _rfPrefParaBlocked(p, ex) {
 const _RF_SLOT_WORDS = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack" };
 const _RF_CARD_TITLE_RE =
   /^(\s*📝\s*)(Breakfast|Lunch|Dinner|Supper|Snack|早餐|午餐|晚餐|加餐)(\b[^\n]*?logged!?)/imu;
+// v30: label captured separately — an addition card is relabelled "This addition".
 const _RF_CARD_TOTAL_RE =
-  /^(\s*🍽\s*This (?:meal|snack|breakfast|lunch|dinner)\s*:\s*)(\d[\d,]*)(\s*kcal)/imu;
+  /^(\s*🍽\s*This\s+)(meal|snack|breakfast|lunch|dinner|addition)(\s*:\s*)(\d[\d,]*)(\s*kcal)/imu;
 const _RF_CARD_ROW_RE =
   /^(\s*[·•]\s*)(.+?)(\s+[—–-]\s+)(\d[\d,]*)(\s*g\s+[—–-]\s+)(\d[\d,]*)(\s*kcal\b)/imu;
 const _rfNormName = (s) =>
@@ -1598,9 +1599,38 @@ function _rfCardReconcile(text, agentId, stats) {
     // whole meal) — its total is a delta, and "fixing" the coach's whole-meal
     // total to it produced "🍽 This meal: 1 kcal" over a 160 kcal shake.
     // Numbers are only reconciled when the render covers the whole card.
-    const cardRows = lines.filter((l) => _RF_CARD_ROW_RE.test(l)).length;
+    const rowLines = lines.filter((l) => _RF_CARD_ROW_RE.test(l));
+    const cardRows = rowLines.length;
     const renderRows = Array.isArray(r.dishes) ? r.dishes.length : 0;
-    const numbersOk = renderRows > 0 && cardRows <= renderRows;
+    // v30 (#300 reopen, 050225 2026-09-16): the OTHER direction. After the
+    // engine fix the render is the whole meal (6 rows, 1730 kcal) while the
+    // coach writes an ADDITION card — only the cupcake row, "This meal: 350",
+    // macros of the cupcake. v26's "cardRows <= renderRows" then replaced
+    // 350 with 1730 over a single 350 kcal row (five cards that day, ×4.9).
+    // Three scopes now:
+    //   fullCard      rows match → whole-meal reconcile (title, rows, total);
+    //   additionCard  fewer rows than the record → an addition view: rows
+    //                 reconcile by name, the total is the SUM of the listed
+    //                 rows' record values, and the label says "This addition";
+    //   partialRender more rows than the record → slot title only (v26).
+    const fullCard = renderRows > 0 && cardRows === renderRows;
+    const additionCard = renderRows > 0 && cardRows > 0 && cardRows < renderRows;
+    let additionTotal = null;
+    if (additionCard) {
+      let sum = 0,
+        all = true;
+      for (const l of rowLines) {
+        const mm = _RF_CARD_ROW_RE.exec(l);
+        const d = mm ? _rfRowMatch(mm[2], r.dishes) : null;
+        if (!d || d.kcal == null) {
+          all = false;
+          break;
+        }
+        sum += d.kcal;
+      }
+      additionTotal = all ? sum : null;
+    }
+    const numbersOk = fullCard || additionCard;
     if (!numbersOk) {
       try {
         console.log(
@@ -1636,11 +1666,22 @@ function _rfCardReconcile(text, agentId, stats) {
         continue;
       }
       m = _RF_CARD_TOTAL_RE.exec(line);
-      if (m && r.total_kcal != null && numbersOk) {
-        const have = Number(m[2].replace(/,/g, ""));
-        if (have !== r.total_kcal) {
-          lines[i] = m[1] + String(r.total_kcal) + m[3] + line.slice(m[0].length);
-          fixes.push("total " + have + "→" + r.total_kcal);
+      if (m && numbersOk) {
+        const label = m[2],
+          have = Number(m[4].replace(/,/g, ""));
+        if (fullCard && r.total_kcal != null) {
+          const wantLabel = /^addition$/iu.test(label) ? "meal" : label;
+          if (have !== r.total_kcal || wantLabel !== label) {
+            lines[i] =
+              m[1] + wantLabel + m[3] + String(r.total_kcal) + m[5] + line.slice(m[0].length);
+            fixes.push("total " + have + "→" + r.total_kcal);
+          }
+        } else if (additionCard && additionTotal != null) {
+          if (have !== additionTotal || !/^addition$/iu.test(label)) {
+            lines[i] =
+              m[1] + "addition" + m[3] + String(additionTotal) + m[5] + line.slice(m[0].length);
+            fixes.push("addition " + label + " " + have + "→" + additionTotal);
+          }
         }
         continue;
       }
