@@ -2,7 +2,21 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 30;
+const _REPLY_FILTER_HEADER_VERSION = 31;
+// v31 (2026-09-17, openclaw-infra#331): persist-claim LOOP breaker. 050313
+// answered the nightly supplement ask and got "Correction — … Send it again"
+// four times in five minutes (04:16–04:21Z): the coach never called a write
+// tool, so every resend was refuted again and the copy kept asking for the
+// one action that could not succeed. The user had to break the loop himself
+// ("You're repeating yourself"). From v31 the refuted path remembers its own
+// corrections per agent (globalThis.__nrClaimCorrections, 30-min window):
+// from the third one on the copy no longer asks for a resend ("resending
+// won't fix it … no need to send it again"), the decision is {y:"claim-loop"}
+// / stats.pl, the journal says "persist-claim LOOP", and the first loop hit
+// posts a (non-critical) wecom alert so a human looks at why the write is
+// missing (this time: the answer had no storage — fixed with a standing
+// item). {"persistClaimLoopBreak":false} disables; persistClaimLoopN (default
+// 2) is how many corrections must precede the loop copy.
 // v25 (2026-09-14, openclaw-infra#272 reopen + #250 reopen):
 // (a) "Got it — logging the same plate for dinner too. Just to confirm: full
 //     second serving or smaller?" (050311 09-13): the engine ASKED and wrote
@@ -1302,6 +1316,31 @@ function _rfPersistClaimCanary(cfg, filterCfg, agentId, sinceMs, claimPreview) {
     if (t && typeof t.unref === "function") t.unref();
   } catch {}
 }
+// v31 (#331): per-agent correction history for the loop breaker. Lives on
+// globalThis so a header refresh (and the tests) can reset it; entries older
+// than the window are dropped on read.
+const _RF_CLAIM_LOOP_MS = 30 * 60 * 1000;
+const _RF_CLAIM_LOOP_N = 2;
+function _rfClaimLoopHistory() {
+  if (!(globalThis.__nrClaimCorrections instanceof Map))
+    globalThis.__nrClaimCorrections = new Map();
+  return globalThis.__nrClaimCorrections;
+}
+function _rfClaimLoopCount(agentId, now) {
+  const h = _rfClaimLoopHistory();
+  const kept = (h.get(agentId) || []).filter(
+    (t) => typeof t === "number" && now - t <= _RF_CLAIM_LOOP_MS,
+  );
+  if (kept.length) h.set(agentId, kept);
+  else h.delete(agentId);
+  return kept.length;
+}
+function _rfClaimLoopRecord(agentId, now) {
+  const h = _rfClaimLoopHistory();
+  const arr = h.get(agentId) || [];
+  arr.push(now);
+  h.set(agentId, arr.slice(-20));
+}
 function _rfHasBareClaim(text) {
   for (const line of text.split("\n")) {
     if (!_RF_CLAIM_RE.test(line)) continue;
@@ -1412,16 +1451,32 @@ function _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg) {
     });
     if (!removed.length) return text;
     const zh = removed.some((s) => /[一-鿿]/.test(s));
-    const correction = zh
-      ? "更正——这条其实没有保存成功。再发一次,我马上记上。"
-      : "Correction — that didn't actually get saved on my end. Send it again and I'll log it properly.";
+    // v31 (#331): the third refuted claim inside 30 min is a loop — the
+    // resend the copy asks for has already failed twice. Say so instead,
+    // never ask for it again, and wake a human on the first loop hit.
+    const now = Date.now();
+    const loopOn = !(filterCfg && filterCfg.persistClaimLoopBreak === false);
+    const loopN =
+      filterCfg && Number.isFinite(Number(filterCfg.persistClaimLoopN))
+        ? Math.max(1, Math.floor(Number(filterCfg.persistClaimLoopN)))
+        : _RF_CLAIM_LOOP_N;
+    const prior = loopOn ? _rfClaimLoopCount(agentId, now) : 0;
+    const looping = loopOn && prior >= loopN;
+    const correction = looping
+      ? zh
+        ? "更正——这条还是没保存成功,重发也没用。我已经把它标记上报,你不用再发了。"
+        : "Correction — that still didn't get saved on my end, and resending won't fix it. I've flagged it so it gets sorted — no need to send it again."
+      : zh
+        ? "更正——这条其实没有保存成功。再发一次,我马上记上。"
+        : "Correction — that didn't actually get saved on my end. Send it again and I'll log it properly.";
     const rest = lines
       .join("\n")
       .replace(/\n{3,}/g, "\n\n")
       .trim();
     if (stats) {
       stats.pc = (stats.pc || 0) + removed.length;
-      stats.k.push({ y: "claim", p: removed[0].slice(0, 90) });
+      stats.k.push({ y: looping ? "claim-loop" : "claim", p: removed[0].slice(0, 90) });
+      if (looping) stats.pl = (stats.pl || 0) + 1;
     }
     try {
       console.log(
@@ -1435,6 +1490,34 @@ function _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg) {
           JSON.stringify(removed[0].slice(0, 120)),
       );
     } catch {}
+    if (loopOn) _rfClaimLoopRecord(agentId, now);
+    if (looping) {
+      try {
+        console.error(
+          "[reply-filter] persist-claim LOOP agent=" +
+            agentId +
+            " corrections=" +
+            (prior + 1) +
+            " in " +
+            Math.round(_RF_CLAIM_LOOP_MS / 60000) +
+            " min — resend copy suppressed; the answer has no write behind it (missing storage or tool never called). infra#331",
+        );
+      } catch {}
+      if (prior === loopN) {
+        _rfAlert({
+          jobId: "reply-filter-claim-loop",
+          jobName: "persist-claim loop",
+          message:
+            "⚠️ persist-claim 死循环 agent=" +
+            agentId +
+            ":30 分钟内第 " +
+            (prior + 1) +
+            " 次纠正,claim=" +
+            JSON.stringify(removed[0].slice(0, 80)) +
+            " — 已改用不要求重发的文案。多半是回答没有落盘位(补剂/习惯类)或写入工具没被调用,请看该户工作区。infra#331",
+        });
+      }
+    }
     _rfPersistClaimCanary(cfg, filterCfg, agentId, state.userAt, removed[0]);
     return rest ? correction + "\n\n" + rest : correction;
   } catch (e) {
@@ -1910,6 +1993,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     lv: 0,
     pc: 0,
     pu: 0,
+    pl: 0,
     cc: 0,
     pf: 0,
     wd: 0,
