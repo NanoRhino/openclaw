@@ -2,7 +2,14 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 31;
+const _REPLY_FILTER_HEADER_VERSION = 32;
+// v32 (2026-09-17, openclaw-infra#331 reopen, Jason): (a) the resend copy is
+// capped at THREE — persistClaimLoopN defaults to 3, so the fourth refuted
+// claim inside 30 min is the loop copy; (b) "already" is a recap only when it
+// sits next to the claim verb ("is already logged", "already have that
+// logged", "already in your log"). "Yep, already got it — 4 magnesium chews
+// logged for tonight" (050313 04:21:16Z, answering "did you log it?") is a
+// fresh claim and is judged like any other: refuted → corrected.
 // v31 (2026-09-17, openclaw-infra#331): persist-claim LOOP breaker. 050313
 // answered the nightly supplement ask and got "Correction — … Send it again"
 // four times in five minutes (04:16–04:21Z): the coach never called a write
@@ -1079,8 +1086,10 @@ const _RF_CLAIM_NEG_RE =
 // v29: "locked in / marked / counts as logged" describes the record's state
 // (050269 2026-09-16: "Breakfast's locked in as logged." answering the
 // coach's own clarification question) — a recap, never a fresh claim.
+// v32: "already" recaps only next to the claim verb — "already got it — X
+// logged for tonight" is a fresh claim (050313 04:21:16Z).
 const _RF_CLAIM_RECAP_RE =
-  /\b(?:already|earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|\b(?:locked in|marked|counts?|shows?|stays?|remains?|still|sits?|sitting|stands?) as (?:logged|saved|recorded|tracked)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
+  /\b(?:earlier|yesterday|so far|this week|last week|previously|before|streak|total|history)\b|\balready\s+(?:\w+\s+){0,2}(?:logged|saved|recorded|tracked|in (?:your|the) (?:log|record|diary|day))\b|\b(?:logged|saved|recorded|tracked)\s+already\b|\b(?:locked in|marked|counts?|shows?|stays?|remains?|still|sits?|sitting|stands?) as (?:logged|saved|recorded|tracked)\b|(?:已经|之前|昨天|本周|上周|到目前|累计)/iu;
 const _RF_CLAIM_MODAL_RE =
   /\b(?:will|'ll|would|can|could|should|shall|once|when|if|want me to|let me know|make sure)\b|(?:会|将|可以|要不要|如果|一旦)/iu;
 const _RF_CLAIM_FRESH_MS = 15 * 60 * 1000;
@@ -1320,7 +1329,7 @@ function _rfPersistClaimCanary(cfg, filterCfg, agentId, sinceMs, claimPreview) {
 // globalThis so a header refresh (and the tests) can reset it; entries older
 // than the window are dropped on read.
 const _RF_CLAIM_LOOP_MS = 30 * 60 * 1000;
-const _RF_CLAIM_LOOP_N = 2;
+const _RF_CLAIM_LOOP_N = 3; // v32: the resend copy goes out at most three times (Jason, #331 reopen)
 function _rfClaimLoopHistory() {
   if (!(globalThis.__nrClaimCorrections instanceof Map))
     globalThis.__nrClaimCorrections = new Map();
