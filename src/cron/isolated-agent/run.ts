@@ -21,6 +21,7 @@ import {
   resolveCronPayloadOutcome,
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
+import { resolveCronInboundGateReason } from "./inbound-gate.js";
 import { resolveCronLeaveGateReason } from "./leave-gate.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
@@ -871,6 +872,23 @@ async function finalizeCronRun(params: {
         accountId: prepared.resolvedDelivery.accountId,
       }),
     );
+  // openclaw-infra#346: a reminder whose user messaged DURING the run is
+  // stale by construction — the chat turn owns the conversation now. Runs at
+  // delivery time because fire-time gates cannot see an inbound that lands
+  // mid-run (060334: reminder started 17:15:00Z, lunch texted 17:15:41Z,
+  // breakfast-recap reminder delivered 17:16:06Z on top of the real card).
+  const inboundGateReason = resolveCronInboundGateReason(prepared.input.job, {
+    deliveryRequested: prepared.deliveryRequested,
+    workspaceDir: prepared.workspaceDir,
+    runStartedAt: execution.runStartedAt,
+  });
+  if (inboundGateReason) {
+    logWarn(
+      `[cron:${prepared.input.job.id} ${prepared.input.job.name}] inbound-gate: reminder not delivered (${inboundGateReason})`,
+    );
+    summary = `inbound-gate (not delivered — ${inboundGateReason}): ${summary ?? ""}`.trim();
+    return resolveRunOutcome({ delivered: false, deliveryAttempted: false });
+  }
   const deliveryResult = await dispatchCronDelivery({
     cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
