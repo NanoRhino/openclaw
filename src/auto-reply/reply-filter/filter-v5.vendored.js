@@ -2,7 +2,19 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 33;
+const _REPLY_FILTER_HEADER_VERSION = 34;
+// v34 (2026-09-18, openclaw-infra#313 reopen): 050306 got "Correction — …
+// Send it again" twice for "✓ Already got those leftovers logged — you're at
+// 1383/1892 kcal" — a TRUE sentence: the record landed 25 s earlier, in the
+// previous turn, so this turn's inbound window could not see the write, and
+// v32's narrowed recap rule ("already" next to the verb) no longer read
+// "already got those leftovers logged" as a recap. A recap-shaped claim
+// (already / got it / counted) is about the record's STATE, not this turn's
+// write: a member data write inside the last 30 min backs it (decision
+// {y:"claim-recap-recent"}, stats.pr). And the canary now looks 15 s PAST
+// the correction (persistClaimCanaryLateMs): 050025 09-17 wrote the lunch
+// 6.4 s after the correction shipped — a premature correction the old
+// [inbound, corrected+2s] window called "ok".
 // v33 (2026-09-18, openclaw-infra#347): 060390 got "... and do tool calls in
 // the think block? No, tool calls happen outside the think/final structure."
 // as its own SMS — the seventh paragraph of a 990-char format deliberation
@@ -1249,6 +1261,20 @@ function _rfWorkspaceWriteIn(ws, sinceMs, untilMs) {
 // a turn-state reset that moved userAt past the file's mtime (#304's shape)
 // no longer blinds the belt. `blind` is the answer on a read surprise —
 // true for the gate (never correct on a blind spot), false for the canary.
+// v34: a recap-shaped claim is backed by ANY member data write in the last
+// window (default 30 min) — the write it recaps happened in an earlier turn.
+const _RF_CLAIM_RECAP_WINDOW_MS = 30 * 60 * 1000;
+// ("Got it — logged …" is a FRESH claim opener, not a recap — only already / counted / still … qualify.)
+const _RF_CLAIM_RECAP_WORD_RE =
+  /\balready\b|\bcounted\b|\bstill (?:at|counted|logged|in)\b|(?:已经|已记)/iu;
+function _rfWorkspaceRecentWriteMs(cfg, agentId, windowMs) {
+  try {
+    const ws = _rfAgentWorkspace(cfg, agentId);
+    return _rfWorkspaceWriteIn(ws, Date.now() - windowMs, null);
+  } catch {
+    return Date.now(); // read surprise → treat as backed (never correct on a blind spot)
+  }
+}
 function _rfWorkspaceWroteSince(cfg, agentId, sinceMs, blind = true) {
   try {
     const ws = _rfAgentWorkspace(cfg, agentId);
@@ -1331,7 +1357,13 @@ function _rfPersistClaimCanary(cfg, filterCfg, agentId, sinceMs, claimPreview) {
         const ws = _rfAgentWorkspace(cfg, agentId);
         const inbound = _rfLastInboundMs(ws);
         const since = inbound != null && inbound < sinceMs ? inbound : sinceMs;
-        const hit = _rfWorkspaceWriteIn(ws, since, correctedAt);
+        // v34: a write that lands shortly AFTER the correction (050025 09-17: +6.4 s)
+        // means the correction was premature — look 15 s past it.
+        const lateMs =
+          filterCfg && Number.isFinite(Number(filterCfg.persistClaimCanaryLateMs))
+            ? Math.max(0, Number(filterCfg.persistClaimCanaryLateMs))
+            : 15000;
+        const hit = _rfWorkspaceWriteIn(ws, since, correctedAt + lateMs);
         if (hit == null) {
           try {
             console.log(
@@ -1523,6 +1555,33 @@ function _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg) {
         .trim();
     });
     if (!removed.length) return text;
+    // v34 (#313 reopen): recap-shaped claims are about the record's state —
+    // a member data write in the last 30 min backs them (050306: written 25 s
+    // earlier, in the previous turn, outside this turn's inbound window).
+    if (removed.some((s) => _RF_CLAIM_RECAP_WORD_RE.test(s))) {
+      const recapWindow =
+        filterCfg && Number.isFinite(Number(filterCfg.persistClaimRecapWindowMs))
+          ? Math.max(0, Number(filterCfg.persistClaimRecapWindowMs))
+          : _RF_CLAIM_RECAP_WINDOW_MS;
+      const recent = _rfWorkspaceRecentWriteMs(cfg, agentId, recapWindow);
+      if (recent != null) {
+        if (stats) {
+          stats.pr = (stats.pr || 0) + 1;
+          stats.k.push({ y: "claim-recap-recent", p: removed[0].slice(0, 90) });
+        }
+        try {
+          console.log(
+            "[reply-filter] persist-claim recap backed by a data write " +
+              Math.round((Date.now() - recent) / 1000) +
+              " s ago agent=" +
+              agentId +
+              " claim=" +
+              JSON.stringify(removed[0].slice(0, 100)),
+          );
+        } catch {}
+        return text;
+      }
+    }
     const zh = removed.some((s) => /[一-鿿]/.test(s));
     // v31 (#331): the third refuted claim inside 30 min is a loop — the
     // resend the copy asks for has already failed twice. Say so instead,
@@ -2067,6 +2126,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     pc: 0,
     pu: 0,
     pl: 0,
+    pr: 0,
     tl: 0,
     cc: 0,
     pf: 0,
