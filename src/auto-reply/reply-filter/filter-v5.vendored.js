@@ -2,7 +2,17 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 32;
+const _REPLY_FILTER_HEADER_VERSION = 33;
+// v33 (2026-09-18, openclaw-infra#347): 060390 got "... and do tool calls in
+// the think block? No, tool calls happen outside the think/final structure."
+// as its own SMS — the seventh paragraph of a 990-char format deliberation
+// whose other six were killed; it carried a "?" and no hard mark, so the
+// suspicion gate skipped the classifier. Two belts: hard marks for the
+// model's output-format vocabulary (think block / think-final / tool calls /
+// final structure / <final> / "I'll do:" / system prompt / "the skill says";
+// 40-day corpus: each hits only that message), and a kept paragraph that
+// opens as the continuation of a killed one ("... and …") is dropped with it
+// ({y:"tail"}, stats.tl, journal "dropped the tail of a killed paragraph").
 // v32 (2026-09-17, openclaw-infra#331 reopen, Jason): (a) the resend copy is
 // capped at THREE — persistClaimLoopN defaults to 3, so the fourth refuted
 // claim inside 30 min is the loop copy; (b) "already" is a recap only when it
@@ -886,6 +896,46 @@ function _isMealConfirmFastAccept(text) {
 // paragraphs: 92% skip; 380 never-delivered internal paragraphs: every true
 // thinking-process paragraph carries a marker). Kill switch:
 // reply-filter.json {"suspicionGate": false} → v7 behavior (classify all).
+// v33 (#347): a paragraph that OPENS as a continuation of the paragraph the
+// filter just killed ("... and do tool calls in the think block? No, tool
+// calls happen outside the think/final structure.") is the tail of that
+// internal text — never a message of its own. 060390 2026-09-18: 990 chars
+// of format deliberation, six paragraphs killed, the seventh (a "?"-bearing,
+// unmarked fragment) skipped the classifier and shipped as its own SMS.
+// `list` holds null for killed paragraphs; a kept paragraph whose left
+// neighbour was killed and which opens with an ellipsis + conjunction is
+// dropped too (chained, so a tail of a tail goes as well).
+const _RF_KILLED_TAIL_RE =
+  /^\s*(?:\.{3}|…)\s*(?:and|or|but|so|then|because|which|that|nor|also)\b/iu;
+function _rfDropKilledTails(list, stats, agentId) {
+  const out = [];
+  let prevKilled = false;
+  for (const p of list) {
+    if (p === null || p === undefined) {
+      prevKilled = true;
+      continue;
+    }
+    if (prevKilled && _RF_KILLED_TAIL_RE.test(p)) {
+      if (stats) {
+        stats.tl = (stats.tl || 0) + 1;
+        stats.k.push({ y: "tail", p: p.trim().slice(0, 90) });
+      }
+      try {
+        console.log(
+          "[reply-filter] dropped the tail of a killed paragraph agent=" +
+            agentId +
+            " text=" +
+            JSON.stringify(p.trim().slice(0, 100)),
+        );
+      } catch {}
+      prevKilled = true;
+      continue;
+    }
+    prevKilled = false;
+    out.push(p);
+  }
+  return out;
+}
 const _RF_HARD_MARK = new RegExp(
   [
     '^\\s*[\\[{]["\\w]', // JSON blob
@@ -924,6 +974,20 @@ const _RF_HARD_MARK = new RegExp(
     "\\bskip \\d+[ab]\\b",
     "\\b(?:intake[- ]signal|weight[- ]lead|no-weight (?:report|path|step)|weight-present path)\\b",
     "\\bGate says no\\b",
+    // v33 (#347, 060390 2026-09-18): "... and do tool calls in the think block?
+    // No, tool calls happen outside the think/final structure." — the model
+    // debating its own output format. It carried a "?" and no mark, so the
+    // suspicion gate skipped the classifier and it shipped as its own SMS.
+    // Corpus 2026-09-18 (40 d, 13,211 delivered bodies): each token hits only
+    // that one message.
+    "\\bthink block\\b",
+    "\\bthink\\s*\\/\\s*final\\b",
+    "\\bfinal (?:structure|message|block|tag)\\b",
+    "<\\/?final>",
+    "\\btool calls?\\b",
+    "\\bI'?ll do:",
+    "\\bsystem prompt\\b",
+    "\\bthe (?:skill|format) says\\b",
     // generic snake_case (unbackticked internal vars like "Cal_safe is false");
     // on_track is whitelisted — it appears in the day-summary template itself.
     "\\b(?!on_track\\b)[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]+\\b",
@@ -2003,6 +2067,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
     pc: 0,
     pu: 0,
     pl: 0,
+    tl: 0,
     cc: 0,
     pf: 0,
     wd: 0,
@@ -2096,28 +2161,32 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
       ? _rfPrefExclusions(cfg, agentId)
       : null;
   const afterRegex = _dedupParagraphs(
-    paragraphs.filter((p) => {
-      if (_isUserFacingUrlPara(p)) return true;
-      if (_prefEx && _prefEx.size) {
-        const why = _rfPrefParaBlocked(p, _prefEx);
-        if (why) {
-          stats.pf = (stats.pf || 0) + 1;
-          stats.k.push({ y: "pref", p: why + ": " + p.trim().slice(0, 80) });
-          try {
-            console.log(
-              "[reply-filter] preference belt dropped a " + why + " paragraph agent=" + agentId,
-            );
-          } catch {}
-          return false;
+    _rfDropKilledTails(
+      paragraphs.map((p) => {
+        if (_isUserFacingUrlPara(p)) return p;
+        if (_prefEx && _prefEx.size) {
+          const why = _rfPrefParaBlocked(p, _prefEx);
+          if (why) {
+            stats.pf = (stats.pf || 0) + 1;
+            stats.k.push({ y: "pref", p: why + ": " + p.trim().slice(0, 80) });
+            try {
+              console.log(
+                "[reply-filter] preference belt dropped a " + why + " paragraph agent=" + agentId,
+              );
+            } catch {}
+            return null;
+          }
         }
-      }
-      if (_fastReject(p.trim())) {
-        stats.rk++;
-        stats.k.push({ y: "rx", p: p.trim().slice(0, 90) });
-        return false;
-      }
-      return true;
-    }),
+        if (_fastReject(p.trim())) {
+          stats.rk++;
+          stats.k.push({ y: "rx", p: p.trim().slice(0, 90) });
+          return null;
+        }
+        return p;
+      }),
+      stats,
+      agentId,
+    ),
   );
   if (afterRegex.length === 0) return _done(true, "");
   // R4 fast-accept: meal confirmations skip the LLM phase (Phase 1 already ran).
@@ -2186,7 +2255,7 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
         return p;
       }),
     );
-    const kept = results.filter((p) => p !== null);
+    const kept = _rfDropKilledTails(results, stats, agentId);
     if (kept.length === 0) {
       if (stats.fc > 0) _rfAlertFailClosed(agentId, stats.fc);
       return _done(true, "");
