@@ -1014,6 +1014,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
               output.stopReason = mapStopReason(delta.stop_reason);
+              // refusal / sensitive end the stream as "error" with zero output;
+              // keep the provider's word so the failover log can say why.
+              if (output.stopReason === "error") {
+                output.errorMessage = `anthropic stop_reason=${delta.stop_reason}`;
+              }
             }
             if (typeof usage?.input_tokens === "number") {
               output.usage.input = usage.input_tokens;

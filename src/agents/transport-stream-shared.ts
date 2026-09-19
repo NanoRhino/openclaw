@@ -105,7 +105,13 @@ export function finalizeTransportStream(params: {
     throw new Error("Request was aborted");
   }
   if (output.stopReason === "aborted" || output.stopReason === "error") {
-    throw new Error("An unknown error occurred");
+    // Keep the generic prefix (failover classification keys on it); append the
+    // provider's own reason when the transport recorded one, so the journal's
+    // rawError says WHY the stream ended without a reply (openclaw-infra#344:
+    // 28 consolidation turns ended with 0 output tokens and nothing but
+    // "An unknown error occurred" to go on).
+    const detail = output.errorMessage?.trim();
+    throw new Error(detail ? `An unknown error occurred (${detail})` : "An unknown error occurred");
   }
   stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
   stream.end();
