@@ -49,6 +49,25 @@ describe("transport stream shared helpers", () => {
     expect(end).toHaveBeenCalledTimes(1);
   });
 
+  it("names the provider's stop reason when an error-ended stream is finalized", () => {
+    const push = vi.fn();
+    const end = vi.fn();
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push, end },
+        output: { stopReason: "error", errorMessage: "anthropic stop_reason=refusal" },
+      }),
+    ).toThrow("An unknown error occurred (anthropic stop_reason=refusal)");
+    expect(() =>
+      finalizeTransportStream({
+        stream: { push, end },
+        output: { stopReason: "error" },
+      }),
+    ).toThrow("An unknown error occurred");
+    expect(push).not.toHaveBeenCalled();
+    expect(end).not.toHaveBeenCalled();
+  });
+
   it("marks transport stream failures and runs cleanup", () => {
     const push = vi.fn();
     const end = vi.fn();
