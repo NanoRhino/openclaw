@@ -31,7 +31,11 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
-import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import {
@@ -995,7 +999,7 @@ export async function runEmbeddedAttempt(
     // enforceFinalTag is resolved (e.g. via per-agent/defaults config), the hint
     // must follow it so the model is told about <final> exactly when the gate is
     // active. Falls back to provider detection when the gate is unset.
-    const reasoningTagHint = resolveReasoningTagHint(params.enforceFinalTag, params.provider, {
+    const reasoningTagGate = resolveReasoningTagHint(params.enforceFinalTag, params.provider, {
       config: params.config,
       workspaceDir: effectiveWorkspace,
       env: process.env,
@@ -1003,6 +1007,13 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     });
+    // openclaw-infra#358: a cron-triggered isolated run (nightly memory
+    // consolidation on Opus 5) gets the <final> contract without the <think>
+    // mandate — Opus 5 refuses the full member system prompt whenever the
+    // hint demands hidden reasoning, and the silent NO_REPLY turn has no
+    // reader for <think> anyway. Member-facing sessions keep the full hint.
+    const reasoningTagHint: boolean | "final-only" =
+      reasoningTagGate && isCronSessionKey(params.sessionKey) ? "final-only" : reasoningTagGate;
     // Resolve channel-specific message actions for system prompt
     const channelActions = runtimeChannel
       ? listChannelSupportedActions(
