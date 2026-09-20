@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 34;
+const _REPLY_FILTER_HEADER_VERSION = 35;
 // v34 (2026-09-18, openclaw-infra#313 reopen): 050306 got "Correction — …
 // Send it again" twice for "✓ Already got those leftovers logged — you're at
 // 1383/1892 kcal" — a TRUE sentence: the record landed 25 s earlier, in the
@@ -1714,6 +1714,15 @@ const _RF_CARD_TOTAL_RE =
   /^(\s*🍽\s*This\s+)(meal|snack|breakfast|lunch|dinner|addition)(\s*:\s*)(\d[\d,]*)(\s*kcal)/imu;
 const _RF_CARD_ROW_RE =
   /^(\s*[·•]\s*)(.+?)(\s+[—–-]\s+)(\d[\d,]*)(\s*g\s+[—–-]\s+)(\d[\d,]*)(\s*kcal\b)/imu;
+// v35 (#300 reopen, 050313 2026-09-20): a card row is ANY bullet that ends in
+// "N kcal" — "· TRIP Calm L-theanine drink — 355ml — 30 kcal" and
+// "· Premier Protein Shake (Vanilla) — 160 kcal" are rows too. The grams-only
+// regex above missed them, the card counted 2 rows against a 3-row record,
+// the addition-view branch fired and the total became the sum of the two
+// gram rows (157→127) — the coach had it right. Groups: bullet, name, sep,
+// middle ("355ml — " / "" ), kcal, unit. Grams are only rewritten on g rows.
+const _RF_CARD_ROWANY_RE =
+  /^(\s*[·•]\s*)(.+?)(\s+[—–-]\s+)((?:.*?[—–-]\s+)?)(\d[\d,]*)(\s*kcal\b)/imu;
 const _rfNormName = (s) =>
   String(s || "")
     .toLowerCase()
@@ -1814,7 +1823,7 @@ function _rfCardReconcile(text, agentId, stats) {
     // whole meal) — its total is a delta, and "fixing" the coach's whole-meal
     // total to it produced "🍽 This meal: 1 kcal" over a 160 kcal shake.
     // Numbers are only reconciled when the render covers the whole card.
-    const rowLines = lines.filter((l) => _RF_CARD_ROW_RE.test(l));
+    const rowLines = lines.filter((l) => _RF_CARD_ROWANY_RE.test(l)); // v35: any "… — N kcal" bullet
     const cardRows = rowLines.length;
     const renderRows = Array.isArray(r.dishes) ? r.dishes.length : 0;
     // v30 (#300 reopen, 050225 2026-09-16): the OTHER direction. After the
@@ -1835,7 +1844,7 @@ function _rfCardReconcile(text, agentId, stats) {
       let sum = 0,
         all = true;
       for (const l of rowLines) {
-        const mm = _RF_CARD_ROW_RE.exec(l);
+        const mm = _RF_CARD_ROWANY_RE.exec(l);
         const d = mm ? _rfRowMatch(mm[2], r.dishes) : null;
         if (!d || d.kcal == null) {
           all = false;
@@ -1930,6 +1939,18 @@ function _rfCardReconcile(text, agentId, stats) {
               "g/" +
               wantK,
           );
+        }
+        continue;
+      }
+      // v35: a non-gram row ("355ml", no quantity) — reconcile the kcal only.
+      m = _RF_CARD_ROWANY_RE.exec(line);
+      if (m && numbersOk) {
+        const d = _rfRowMatch(m[2], r.dishes);
+        if (!d || d.kcal == null) continue;
+        const haveK = Number(m[5].replace(/,/g, ""));
+        if (haveK !== d.kcal) {
+          lines[i] = m[1] + m[2] + m[3] + m[4] + String(d.kcal) + m[6] + line.slice(m[0].length);
+          fixes.push("row " + m[2].trim().slice(0, 30) + " " + haveK + "→" + d.kcal + " kcal");
         }
       }
     }
