@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 36;
+const _REPLY_FILTER_HEADER_VERSION = 37;
 // v34 (2026-09-18, openclaw-infra#313 reopen): 050306 got "Correction — …
 // Send it again" twice for "✓ Already got those leftovers logged — you're at
 // 1383/1892 kcal" — a TRUE sentence: the record landed 25 s earlier, in the
@@ -1713,6 +1713,8 @@ function _rfPrefParaBlocked(p, ex) {
 }
 // ── v24 card reconciliation (openclaw-infra#286) — see changelog ──
 const _RF_SLOT_WORDS = { breakfast: "Breakfast", lunch: "Lunch", dinner: "Dinner", snack: "Snack" };
+// v37: a bullet whose "name" is a slot word is a day-list line, not a card row.
+const _RF_DAYLIST_ROW_RE = /^(?:breakfast|lunch|dinner|supper|snack|早餐|午餐|晚餐|加餐)$/iu;
 const _RF_CARD_TITLE_RE =
   /^(\s*📝\s*)(Breakfast|Lunch|Dinner|Supper|Snack|早餐|午餐|晚餐|加餐)(\b[^\n]*?logged!?)/imu;
 // v30: label captured separately — an addition card is relabelled "This addition".
@@ -1829,7 +1831,23 @@ function _rfCardReconcile(text, agentId, stats) {
     // whole meal) — its total is a delta, and "fixing" the coach's whole-meal
     // total to it produced "🍽 This meal: 1 kcal" over a 160 kcal shake.
     // Numbers are only reconciled when the render covers the whole card.
-    const rowLines = lines.filter((l) => _RF_CARD_ROWANY_RE.test(l)); // v35: any "… — N kcal" bullet
+    // v37 (#300 4th reopen, 050281 2026-09-20 22:28Z): a "full day" list under
+    // the card ("· lunch — 488 kcal (shrimp, …)") is not a card row — counted
+    // as rows it made a 2-row snack card look like 6 rows against a 4-row
+    // lunch record ("partial render"), and the slot-only branch retitled the
+    // snack card "Lunch" over its own "🍽 This snack" line.
+    const rowLines = lines.filter((l) => {
+      const mm = _RF_CARD_ROWANY_RE.exec(l);
+      return mm && !_RF_DAYLIST_ROW_RE.test(mm[2].trim());
+    }); // v35: any "… — N kcal" bullet
+    // v37: which of the card's rows the render actually holds, and the slot
+    // the card names for ITSELF on the total line ("🍽 This snack:").
+    const matchedRows = rowLines.filter((l) => {
+      const mm = _RF_CARD_ROWANY_RE.exec(l);
+      return mm && _rfRowMatch(mm[2], r.dishes);
+    }).length;
+    const tm = _RF_CARD_TOTAL_RE.exec(text);
+    const bodySlot = tm && _RF_SLOT_WORDS[tm[2].toLowerCase()] ? tm[2].toLowerCase() : null;
     const cardRows = rowLines.length;
     const renderRows = Array.isArray(r.dishes) ? r.dishes.length : 0;
     // v30 (#300 reopen, 050225 2026-09-16): the OTHER direction. After the
@@ -1843,7 +1861,8 @@ function _rfCardReconcile(text, agentId, stats) {
     //                 reconcile by name, the total is the SUM of the listed
     //                 rows' record values, and the label says "This addition";
     //   partialRender more rows than the record → slot title only (v26).
-    const fullCard = renderRows > 0 && cardRows === renderRows;
+    // v37: equal row COUNTS are not the same meal — every listed row must be in the render.
+    const fullCard = renderRows > 0 && cardRows === renderRows && matchedRows === cardRows;
     const additionCard = renderRows > 0 && cardRows > 0 && cardRows < renderRows;
     let additionTotal = null;
     if (additionCard) {
@@ -1861,6 +1880,27 @@ function _rfCardReconcile(text, agentId, stats) {
       additionTotal = all ? sum : null;
     }
     const numbersOk = fullCard || additionCard;
+    // v37: a card that names a DIFFERENT slot for itself than the render, and
+    // whose rows the render does not fully cover, is about another meal (the
+    // engine's write this turn was the lunch confirm; the coach's card is the
+    // snack it also mentioned). Nothing in it is ours to reconcile.
+    if (bodySlot && bodySlot !== r.slot && !fullCard) {
+      try {
+        console.log(
+          "[reply-filter] card reconcile: card is about " +
+            bodySlot +
+            ", render is " +
+            r.slot +
+            " (" +
+            matchedRows +
+            "/" +
+            cardRows +
+            " rows match) — skipped agent=" +
+            agentId,
+        );
+      } catch {}
+      return text;
+    }
     if (!numbersOk) {
       try {
         console.log(
@@ -1889,7 +1929,30 @@ function _rfCardReconcile(text, agentId, stats) {
               : /^加餐$/u.test(have)
                 ? "snack"
                 : have.toLowerCase();
-        if (haveSlot !== r.slot && !/[\u4e00-\u9fff]/u.test(have)) {
+        // v37: the title only follows the render when the render is demonstrably
+        // THIS card's meal \u2014 every listed row is in it (full card), or at
+        // least one row is and the card does not call itself another slot.
+        // 050244 (13:24Z): a breakfast card retitled "Lunch" from a lunch
+        // render that shared none of its rows; the member had to correct it.
+        const titleOk =
+          fullCard || (cardRows > 0 && matchedRows >= 1 && !(bodySlot && bodySlot !== r.slot));
+        if (haveSlot !== r.slot && !titleOk) {
+          try {
+            console.log(
+              "[reply-filter] card reconcile: title " +
+                have +
+                " kept \u2014 render " +
+                r.slot +
+                " covers " +
+                matchedRows +
+                "/" +
+                cardRows +
+                " rows agent=" +
+                agentId,
+            );
+          } catch {}
+        }
+        if (haveSlot !== r.slot && titleOk && !/[\u4e00-\u9fff]/u.test(have)) {
           lines[i] = m[1] + want + m[3] + line.slice(m[0].length);
           fixes.push("title " + have + "→" + want);
         }
