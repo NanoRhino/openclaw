@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 35;
+const _REPLY_FILTER_HEADER_VERSION = 36;
 // v34 (2026-09-18, openclaw-infra#313 reopen): 050306 got "Correction — …
 // Send it again" twice for "✓ Already got those leftovers logged — you're at
 // 1383/1892 kcal" — a TRUE sentence: the record landed 25 s earlier, in the
@@ -156,13 +156,13 @@ const _REPLY_FILTER_HEADER_VERSION = 35;
 // dummy.txt / empty edits) between finishing real work and composing the
 // <final> reply; the calls fail, and resolveToolErrorWarningPolicy echoed
 // mutating-tool failures to the channel unconditionally. The EMITTER is fixed
-// (messages.suppressToolErrors=true honored before the mutating branch,
-// 021b5b257f3); this rule is the deterministic second belt so no ⚠️-prefixed
-// tool-failure echo of any shape ever reaches a user again, whatever path
-// produces it. Corpus-validated 2026-08-01 against all 28,911 delivered
-// messages: matches exactly the 13 known harness leaks, zero coach-authored
-// hits; the 147 other ⚠️-prefixed lines (error notices like "Something went
-// wrong…", which carry no "failed") are untouched.
+// (patch 016 + messages.suppressToolErrors=true + fork 021b5b257f3); this
+// rule is the deterministic second belt so no ⚠️-prefixed tool-failure echo
+// of any shape ever reaches a user again, whatever path produces it.
+// Corpus-validated 2026-08-01 against all 28,911 delivered messages: matches
+// exactly the 13 known harness leaks, zero coach-authored hits; the 147
+// other ⚠️-prefixed lines (error notices like "Something went wrong…", which
+// carry no "failed") are untouched.
 // v15 (2026-08-14, billing-pilot activation notice): the paragraph "Three
 // promises: only new lows bill · the same pound never bills twice (regain +
 // re-lose = free) · plateaus cost nothing." was killed by the classifier on
@@ -575,20 +575,24 @@ function _fastReject(p) {
   // on an ellipsis + "wait" is an abandoned draft, never finished copy.
   // Corpus-validated: exactly 1 hit in 38,854 delivered texts — the incident.
   if (/(\.\.\.|…)\s*wait[.!?]?\s*$/i.test(p)) return true;
-  // ── v8 additions: task-status + pre-compose narration (2026-07 corpus) ──
-  // "Both tasks complete." / "Well under limit, no cleanup needed." (memory crons)
-  if (/^(?:Both|All) tasks? complete\b/i.test(p)) return true;
-  if (/\bno cleanup needed\b/i.test(p)) return true;
-  // v16 (2026-08-16 W33 leak): report-pipeline step narration — 13 delivered
-  // leaks like "Now run Step 5a (intake signal), skip 5b". Corpus-validated
-  // 0 FP over 61,363 delivered paragraphs (only other hits: three unnoticed
-  // 2026-07-26 W30-night leaks of the same class).
+  // ── v16 additions: report-pipeline step narration (2026-08-16 W33 leak) ──
+  // 13 users received "Now run Step 5a (intake signal), skip 5b…" as SMS:
+  // final-tag discarded the no-<final> narration, patch-018 recovery
+  // resurrected it, and the suspicion gate passed it (intake/weight read as
+  // nutrition vocab → clean signal, no hard mark). Corpus-validated 0 FP over
+  // 61,363 delivered paragraphs; the only non-W33 hits were three 2026-07-26
+  // W30-night leaks of the same class ("The weight-lead.py output…") that had
+  // gone unnoticed — i.e. the patterns also catch the class retroactively.
   if (/^Now (?:run|re-?run|execute)\b/i.test(p)) return true;
   if (/\b(?:run|re-?run|skip|need(?:ed)?|check) (?:Step )?\d+[ab]\b/i.test(p)) return true;
   if (/\bStep \d+[ab]\b/i.test(p)) return true;
   if (/\b(?:intake[- ]signal|weight[- ]lead)\b/i.test(p)) return true;
   if (/^Gate says no\b/i.test(p)) return true;
   if (/\b(?:no-weight (?:report|path|step)|weight-present path)\b/i.test(p)) return true;
+  // ── v8 additions: task-status + pre-compose narration (2026-07 corpus) ──
+  // "Both tasks complete." / "Well under limit, no cleanup needed." (memory crons)
+  if (/^(?:Both|All) tasks? complete\b/i.test(p)) return true;
+  if (/\bno cleanup needed\b/i.test(p)) return true;
   if (/^Everything (?:is |looks )?(?:confirmed|verified|correctly|within)/i.test(p)) return true;
   // "Now update the conclusion and follow-ups fields …" (imperative self-talk)
   if (
@@ -967,8 +971,8 @@ const _RF_HARD_MARK = new RegExp(
     "\\brotat\\w* (?:the |this )?(?:session|memory|log|file|transcript)s?\\b",
     "\\bmark(?:ing|ed)? (?:it |as |them )?sent\\b",
     // v21: unmarked true kills seen in the decisions log — never member copy.
-    // ("no reply needed" itself is NOT a mark: coach sign-offs say it — corpus 2026-09-12: 7 delivered lines.)
     "\\bValidation error:",
+    // ("no reply needed" itself is NOT a mark: coach sign-offs say it — corpus 2026-09-12: 7 delivered lines.)
     "\\b(?:thumbs[- ]?up|like|loved?|heart) reaction\\b",
     "\\breaction to (?:my|the|your) (?:last|previous)\\b",
     "\\bstate updates?\\b",
@@ -977,11 +981,13 @@ const _RF_HARD_MARK = new RegExp(
     "\\bcontent type\\b",
     "\\bvia the (?:system )?script\\b",
     "\\b(?:no cleanup needed|case-sensitiv\\w*|tasks? complete\\w*|restrictions? on file|no (?:notable )?restrictions)\\b",
-    "\\bNow (?:update|set|mark|build|create|write|read|pull|delete|add|run|re-?run|execute|verify|check)\\b",
+    "\\bNow (?:update|set|mark|build|create|write|read|pull|delete|add|run|re-?run|execute|verify|check)\\b", // v16: +run/re-run/execute/verify/check (W33 step narration)
     "\\bLet me (?!know\\b)",
     "\\b(?:I need to|I should(?:n'?t)?(?!'ve\\b| have\\b)|Now I|Now let)\\b", // v21: "it's not something I should've implied" is member copy
     "\\b(?:no intervention needed|pending recalc|goal[- ]weight ask|goal ask|re-?deriv)\\w*",
-    // v16: pipeline step tokens / report internals are never user-facing
+    // v16 (W33 step-narration leak): pipeline step tokens + report internals are
+    // never user-facing — closes the gs=1 hole where intake/weight vocabulary in
+    // narration reads as a nutrition clean signal.
     "\\bStep \\d+[ab]\\b",
     "\\bskip \\d+[ab]\\b",
     "\\b(?:intake[- ]signal|weight[- ]lead|no-weight (?:report|path|step)|weight-present path)\\b",
@@ -2039,6 +2045,55 @@ function _rfAlertFailClosed(agentId, n) {
     }).catch(() => {});
   } catch {}
 }
+// ── v36 (#372): registration gate ──
+// Returns null when the agent may proceed to the mode lists, else a short
+// reason string. Registered = the id has an entry in cfg.agents.list, or it is
+// on the filter's exclude list (operator agents such as main). "unknown" (no
+// sessionKey) is never registered. When the config carries no agents list at
+// all (unit tests, a 3-arg call with a bare config) registration cannot be
+// judged and the gate stays out of the way — the gate's job is the agent that
+// LEFT the list, not a missing config.
+function _rfUnregisteredReason(cfg, agentId, filterCfg) {
+  try {
+    if (filterCfg && filterCfg.unregisteredGate === false) return null;
+    const agents = cfg && cfg.agents && Array.isArray(cfg.agents.list) ? cfg.agents.list : null;
+    if (!agents || agents.length === 0) return null;
+    if (!agentId || agentId === "unknown") return "unresolvable agent (no sessionKey)";
+    const excluded =
+      filterCfg &&
+      filterCfg.mode === "exclude" &&
+      Array.isArray(filterCfg.exclude) &&
+      filterCfg.exclude.includes(agentId);
+    if (excluded) return null;
+    if (agents.some((a) => a && String(a.id) === String(agentId))) return null;
+    return "unregistered agent " + agentId + " (not in agents.list)";
+  } catch {
+    return null;
+  }
+}
+// One operator ping per agent per 10 minutes — a runaway cron would
+// otherwise turn the alert channel into the leak.
+function _rfAlertUnregistered(agentId, reason, path, chars) {
+  try {
+    const g = globalThis;
+    if (!g.__nrUnregAlerted) g.__nrUnregAlerted = new Map();
+    const last = g.__nrUnregAlerted.get(agentId) || 0;
+    if (Date.now() - last < 10 * 60 * 1000) return;
+    g.__nrUnregAlerted.set(agentId, Date.now());
+    _rfAlert({
+      jobId: "reply-filter-unregistered",
+      jobName: "reply-filter unregistered agent",
+      message:
+        "reply filter withheld " +
+        path +
+        " text: " +
+        reason +
+        " (" +
+        chars +
+        " chars). A member agent outside agents.list, or a delivery with no session key — check openclaw.json agents.list and the cron that produced it (#372).",
+    });
+  } catch {}
+}
 // ── Main filter logic ──
 // opts.path: "deliver" (Path 2 — cron/announce/message-tool; fail-closed on
 // classify failure, longer timeout) | anything else = interactive dispatch
@@ -2121,8 +2176,36 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   if (text) text = _stripNonBrandUrls(text);
   const filterCfg = _loadReplyFilterCfg();
   if (!filterCfg?.enabled) return { drop: false, text };
-  const agentId = sessionKey?.split(":")?.[1] ?? "main";
+  // v36 (#372, Jason 2026-09-20): the agent must be resolvable AND registered
+  // before the mode lists are consulted. A missing sessionKey used to fall
+  // to "main" — which sits on the exclude list — so an unregistered agent's
+  // cron announce (bench 060374, dropped from agents.list on 08-21) reached
+  // the channel with no decision line and no journal line at all. Now:
+  // unknown or unregistered → the text is withheld on every path, a
+  // decision line says why, and the operator gets one alert per agent.
+  const agentId = sessionKey?.split(":")?.[1] ?? "unknown";
   const list = filterCfg.exclude ?? filterCfg.include ?? [];
+  const _unreg = _rfUnregisteredReason(cfg, agentId, filterCfg);
+  if (_unreg) {
+    _rfLogDecision({
+      t: new Date().toISOString(),
+      v: _REPLY_FILTER_HEADER_VERSION,
+      a: agentId,
+      path: _rfPath,
+      in: text ? text.length : 0,
+      drop: 1,
+      out: 0,
+      ur: 1,
+      k: [{ y: "unregistered", p: _unreg }],
+    });
+    try {
+      console.warn(
+        `[reply-filter] BLOCKED ${_rfPath} text for ${_unreg} (agent=${agentId}, ${text ? text.length : 0} chars) — #372 fail-closed`,
+      );
+    } catch {}
+    _rfAlertUnregistered(agentId, _unreg, _rfPath, text ? text.length : 0);
+    return { drop: true, text: "" };
+  }
   if (filterCfg.mode === "exclude" && list.includes(agentId)) return { drop: false, text };
   if (filterCfg.mode === "include" && !list.includes(agentId)) return { drop: false, text };
   _rfFireWarmup(filterCfg);
