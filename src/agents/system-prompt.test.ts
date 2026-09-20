@@ -220,6 +220,19 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
+  it("final-only reasoning tag hint keeps the <final> contract without any <think> mandate (openclaw-infra#358)", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: "final-only",
+    });
+
+    expect(prompt).toContain("## Reasoning Format");
+    expect(prompt).toContain("Format every reply as <final>...</final>.");
+    expect(prompt).toContain("Only the final user-visible reply may appear inside <final>.");
+    expect(prompt).not.toContain("<think>");
+    expect(prompt).not.toContain("never seen by the user");
+  });
+
   it("includes a CLI quick reference section", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

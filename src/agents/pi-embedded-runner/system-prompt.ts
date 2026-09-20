@@ -17,7 +17,7 @@ export function buildEmbeddedSystemPrompt(params: {
   ownerNumbers?: string[];
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
-  reasoningTagHint: boolean;
+  reasoningTagHint: boolean | "final-only";
   heartbeatPrompt?: string;
   skillsPrompt?: string;
   docsPath?: string;
