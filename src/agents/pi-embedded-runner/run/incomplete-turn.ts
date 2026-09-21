@@ -65,6 +65,31 @@ export function isIncompleteTerminalAssistantTurn(params: {
   return !params.hasAssistantVisibleText && params.lastAssistant?.stopReason === "toolUse";
 }
 
+/**
+ * openclaw-infra#206 (reopen 2026-09-21): the assistant stopped with
+ * stopReason=toolUse but its content carries no toolCall block — the model
+ * wrote the call as prose ("…</parameter></invoke>" inside a text block), so
+ * the loop has nothing to execute and the turn ends with no visible text.
+ * Every one of the 15 "incomplete turn detected" events in 8 days on prod
+ * was this shape. A plain resubmission recovers it; this predicate is what
+ * the runner gates that retry on.
+ */
+export function isPhantomToolUseTurn(
+  lastAssistant?: { stopReason?: string; content?: unknown } | null,
+): boolean {
+  if (!lastAssistant || lastAssistant.stopReason !== "toolUse") {
+    return false;
+  }
+  const content = lastAssistant.content;
+  if (!Array.isArray(content)) {
+    return true;
+  }
+  return !content.some((block) => {
+    const type = (block as { type?: unknown } | null)?.type;
+    return type === "toolCall" || type === "tool_use" || type === "toolUse";
+  });
+}
+
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
