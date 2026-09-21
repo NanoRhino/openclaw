@@ -123,6 +123,7 @@ import {
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  isPhantomToolUseTurn,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -625,6 +626,13 @@ export async function runEmbeddedPiAgent(
       // orthogonal, model-agnostic resubmission.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
+      // openclaw-infra#206 (reopen 2026-09-21): stopReason=toolUse with NO tool
+      // call block — the model wrote its tool call as prose ("…</parameter>
+      // </invoke>" inside the text), so there is nothing to execute and no
+      // visible text; 15/15 "incomplete turn detected" in 8 days were this
+      // shape, all on member cron reminders, all delivered nothing.
+      const MAX_PHANTOM_TOOL_USE_RETRIES = 2;
+      let phantomToolUseRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -2284,6 +2292,33 @@ export async function runEmbeddedPiAgent(
             );
             continue;
           }
+          // ── phantom tool-use retry (openclaw-infra#206 reopen) ─────────────
+          // The assistant stopped with stopReason=toolUse but its content holds
+          // no toolCall block (the call was written as prose inside the text —
+          // "…</parameter></invoke>"). Nothing ran, nothing is visible, and on a
+          // member cron session the incomplete-turn error is withheld, so the
+          // reminder simply never goes out. Resubmit the same prompt on the same
+          // transcript — no tool executed, so there is no side effect to
+          // duplicate — before falling through to the error path.
+          if (
+            incompleteTurnText &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            isPhantomToolUseTurn(sessionLastAssistant) &&
+            !attempt.replayMetadata.hadPotentialSideEffects &&
+            phantomToolUseRetries < MAX_PHANTOM_TOOL_USE_RETRIES
+          ) {
+            phantomToolUseRetries += 1;
+            log.warn(
+              `[phantom-tool-use-retry] stopReason=toolUse with no tool call block; resubmitting ` +
+                `attempt=${phantomToolUseRetries}/${MAX_PHANTOM_TOOL_USE_RETRIES} ` +
+                `provider=${sessionLastAssistant?.provider ?? provider} ` +
+                `model=${sessionLastAssistant?.model ?? model.id} ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId}`,
+            );
+            continue;
+          }
           if (incompleteTurnText && !finalTagSalvagePayloads) {
             const replayInvalid = resolveReplayInvalidForAttempt(incompleteTurnText);
             const livenessState = resolveRunLivenessState({
@@ -2300,7 +2335,8 @@ export async function runEmbeddedPiAgent(
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `stopReason=${incompleteStopReason} payloads=0 — surfacing error to user`,
+                `sessionKey=${params.sessionKey ?? "-"} stopReason=${incompleteStopReason} payloads=0 ` +
+                `phantomToolUse=${isPhantomToolUseTurn(sessionLastAssistant)} retries=${phantomToolUseRetries} — surfacing error to user`,
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
