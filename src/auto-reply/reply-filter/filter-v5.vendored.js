@@ -2,7 +2,13 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 37;
+const _REPLY_FILTER_HEADER_VERSION = 38;
+// v38 (2026-09-23, openclaw-infra#300 5th reopen): a card row that SUMS several
+// itemized record rows (060329's "Egg omelette (2 eggs, spinach, tomato, onion,
+// butter) — 174g — 261 kcal" over five component rows) covers all of them: the
+// row is judged against their sum and coverage is counted in record rows, so
+// the coach's correct 821 is no longer "reconciled" down to 703 and the row to
+// the single egg component (100 g / 143). See _rfCoverRow.
 // v34 (2026-09-18, openclaw-infra#313 reopen): 050306 got "Correction — …
 // Send it again" twice for "✓ Already got those leftovers logged — you're at
 // 1383/1892 kcal" — a TRUE sentence: the record landed 25 s earlier, in the
@@ -1761,6 +1767,70 @@ function _rfRowMatch(name, dishes) {
   }
   return best;
 }
+// v38 (#300 5th reopen, 060329 2026-09-23 02:07Z): the coach summed five
+// itemized record rows — "Egg (cooked in omelette)", "Spinach (in omelette)",
+// "Tomato …", "Onion …", "Butter (for eggs)" — into ONE card row "Egg omelette
+// (2 eggs, spinach, tomato, onion, butter) — 174g — 261 kcal" and wrote the
+// record's 821. The addition view matched that row to the single best record
+// row (egg, 100 g / 143), rewrote it and set the total to the listed rows' sum
+// (703). A card row COVERS every record row whose head word the row names
+// (egg / spinach / tomato / onion / butter) when it names two or more distinct
+// heads; its record value is their sum, and coverage is counted in record rows.
+const _RF_TOK_STOP = new Set([
+  "and",
+  "the",
+  "with",
+  "for",
+  "from",
+  "cooked",
+  "made",
+  "plain",
+  "large",
+  "small",
+  "medium",
+  "slices",
+  "slice",
+  "pieces",
+  "piece",
+  "cup",
+  "cups",
+  "tbsp",
+  "tsp",
+  "half",
+  "whole",
+  "fresh",
+  "raw",
+  "extra",
+]);
+const _rfTok = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[()]/g, " ")
+    .replace(/[^a-z0-9一-鿿]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((w) => w.length > 2 && !_RF_TOK_STOP.has(w) && !/^\d+$/.test(w));
+function _rfCoverRow(name, dishes) {
+  const full = new Set(_rfTok(name));
+  const heads = new Map();
+  for (const d of dishes || []) {
+    const t = _rfTok(d.name);
+    if (!t.length) continue;
+    const head = t[0];
+    if (full.has(head) && !heads.has(head)) heads.set(head, d);
+  }
+  if (heads.size >= 2) {
+    const parts = [...heads.values()];
+    return {
+      dishes: parts,
+      g: parts.reduce((s, d) => s + (Number(d.g) || 0), 0),
+      kcal: parts.reduce((s, d) => s + (Number(d.kcal) || 0), 0),
+      aggregate: true,
+    };
+  }
+  const best = _rfRowMatch(name, dishes);
+  return best ? { dishes: [best], g: best.g, kcal: best.kcal, aggregate: false } : null;
+}
 function _rfLatestRender(state) {
   for (let i = (state.checkins || []).length - 1; i >= 0; i--) {
     const c = state.checkins[i];
@@ -1842,10 +1912,16 @@ function _rfCardReconcile(text, agentId, stats) {
     }); // v35: any "… — N kcal" bullet
     // v37: which of the card's rows the render actually holds, and the slot
     // the card names for ITSELF on the total line ("🍽 This snack:").
-    const matchedRows = rowLines.filter((l) => {
+    // v38: each card row covers one record row, or several (a summed composite).
+    const covers = new Map();
+    for (const l of rowLines) {
       const mm = _RF_CARD_ROWANY_RE.exec(l);
-      return mm && _rfRowMatch(mm[2], r.dishes);
-    }).length;
+      const c = mm ? _rfCoverRow(mm[2], r.dishes) : null;
+      if (c) covers.set(l, c);
+    }
+    const matchedRows = covers.size;
+    const coveredRecord = new Set();
+    for (const c of covers.values()) for (const d of c.dishes) coveredRecord.add(d);
     const tm = _RF_CARD_TOTAL_RE.exec(text);
     const bodySlot = tm && _RF_SLOT_WORDS[tm[2].toLowerCase()] ? tm[2].toLowerCase() : null;
     const cardRows = rowLines.length;
@@ -1862,20 +1938,26 @@ function _rfCardReconcile(text, agentId, stats) {
     //                 rows' record values, and the label says "This addition";
     //   partialRender more rows than the record → slot title only (v26).
     // v37: equal row COUNTS are not the same meal — every listed row must be in the render.
-    const fullCard = renderRows > 0 && cardRows === renderRows && matchedRows === cardRows;
-    const additionCard = renderRows > 0 && cardRows > 0 && cardRows < renderRows;
+    // v38: coverage is counted in RECORD rows — a summed composite row covers several.
+    const fullCard =
+      renderRows > 0 && matchedRows === cardRows && coveredRecord.size === renderRows;
+    const additionCard =
+      renderRows > 0 &&
+      cardRows > 0 &&
+      !fullCard &&
+      cardRows < renderRows &&
+      coveredRecord.size < renderRows;
     let additionTotal = null;
     if (additionCard) {
       let sum = 0,
         all = true;
       for (const l of rowLines) {
-        const mm = _RF_CARD_ROWANY_RE.exec(l);
-        const d = mm ? _rfRowMatch(mm[2], r.dishes) : null;
-        if (!d || d.kcal == null) {
+        const c = covers.get(l);
+        if (!c || c.kcal == null) {
           all = false;
           break;
         }
-        sum += d.kcal;
+        sum += c.kcal;
       }
       additionTotal = all ? sum : null;
     }
@@ -1980,7 +2062,7 @@ function _rfCardReconcile(text, agentId, stats) {
       }
       m = _RF_CARD_ROW_RE.exec(line);
       if (m && numbersOk) {
-        const d = _rfRowMatch(m[2], r.dishes);
+        const d = covers.get(line);
         if (!d) continue;
         const haveG = Number(m[4].replace(/,/g, "")),
           haveK = Number(m[6].replace(/,/g, ""));
@@ -2014,7 +2096,7 @@ function _rfCardReconcile(text, agentId, stats) {
       // v35: a non-gram row ("355ml", no quantity) — reconcile the kcal only.
       m = _RF_CARD_ROWANY_RE.exec(line);
       if (m && numbersOk) {
-        const d = _rfRowMatch(m[2], r.dishes);
+        const d = covers.get(line);
         if (!d || d.kcal == null) continue;
         const haveK = Number(m[5].replace(/,/g, ""));
         if (haveK !== d.kcal) {
@@ -2491,12 +2573,6 @@ async function _filterReplyText(text, cfg, sessionKey, opts) {
   }
   return _done(false, afterRegex.join("\n\n"));
 }
-
-// ── Source-native port (2026-07-30) ─────────────────────────────────────────
-// This file is a verbatim vendor of openclaw-infra
-// patches/002-reply-filter-v5/filter-v5-header.js (header v13), which until
-// now was INJECTED into built dist chunks by apply.py on every deploy — and
-// twice a dist swap shipped without re-applying it (009-class $400 cache burn
 // 07-24..27 sibling incident; filter-down 07-24). Vendored into source, the
 // filter ships inside the build itself and apply.py 002 becomes a no-op on
 // fork dists (it probes for the marker string below).
