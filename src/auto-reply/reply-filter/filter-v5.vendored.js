@@ -2,7 +2,18 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 38;
+const _REPLY_FILTER_HEADER_VERSION = 39;
+// v39 (2026-09-24, openclaw-infra#313 3rd reopen): meal_checkin ran and answered
+// none/noop → the engine looked and found nothing to write, which is evidence
+// the record already exists, never that "it didn't get saved". 14 days of
+// prod: 5 corrections on this branch, 5 false (050230 "that's the dish name
+// for the pasta I just logged" over a dinner written 18 s earlier; 050306
+// "Already got those leftovers logged" twice; 050025; 060322 "I don't see eggs
+// logged today" — a negation with a curly apostrophe the negation regex did
+// not read). The canary cannot catch this branch (the write was in the
+// previous turn). Now: a none/noop turn PASSES ({y:"claim-noop"}, stats.pn,
+// journal "persist-claim noop (passed)"); "refuted" is reserved for a turn
+// whose meal_checkin results are all errors; the negation regex reads ’ as '.
 // v38 (2026-09-23, openclaw-infra#300 5th reopen): a card row that SUMS several
 // itemized record rows (060329's "Egg omelette (2 eggs, spinach, tomato, onion,
 // butter) — 174g — 261 kcal" over five component rows) covers all of them: the
@@ -1170,7 +1181,7 @@ const _RF_CLAIM_INTENT = {
   added: "I'll add",
 };
 const _RF_CLAIM_NEG_RE =
-  /\b\w+n'?t\b|\b(?:not|never|no|nothing|without|un-?logged|unsaved|missing|don't see|doesn't show)\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
+  /\b\w+n['’]?t\b|\b(?:not|never|no|nothing|without|un-?logged|unsaved|missing|don['’]?t see|doesn['’]?t show|can['’]?t (?:see|find))\b|(?:没有?|未|不会|无法|尚未|还没)/iu;
 // v29: "locked in / marked / counts as logged" describes the record's state
 // (050269 2026-09-16: "Breakfast's locked in as logged." answering the
 // coach's own clarification question) — a recap, never a fresh claim.
@@ -1548,8 +1559,32 @@ function _rfPersistClaimGate(text, agentId, stats, cfg, filterCfg) {
       }
       return text;
     }
-    // refuted: meal_checkin ran and persisted nothing (none/error), the
-    // workspace agrees — the only path that asserts "didn't get saved".
+    // v39 (#313 3rd reopen): the engine RAN and answered none/noop — it looked
+    // at the message against the record and found nothing to write. That is
+    // evidence the record is already there (the write happened in an earlier
+    // turn), not evidence it is missing; every correction on this branch in
+    // 14 days was false, and the canary cannot see a previous turn's write.
+    if (checkins.some((c) => c && String(c.outcome) === "none")) {
+      if (!_rfHasBareClaim(text)) return text;
+      if (stats) {
+        stats.pn = (stats.pn || 0) + 1;
+        stats.k.push({ y: "claim-noop", p: text.slice(0, 90) });
+      }
+      try {
+        console.log(
+          "[reply-filter] persist-claim noop (passed) agent=" +
+            agentId +
+            " checkins=" +
+            JSON.stringify(checkins.map((c) => c.outcome + "/" + c.save)) +
+            " text=" +
+            JSON.stringify(text.slice(0, 100)),
+        );
+      } catch {}
+      return text;
+    }
+    // refuted: meal_checkin ran and every result is an error — the engine
+    // could not write, the workspace agrees — the only path that asserts
+    // "didn't get saved".
     const removed = [];
     const lines = text.split("\n").map((line) => {
       if (!_RF_CLAIM_RE.test(line)) return line;
