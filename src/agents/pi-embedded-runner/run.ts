@@ -124,6 +124,8 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   isPhantomToolUseTurn,
+  PHANTOM_TOOL_USE_RETRY_INSTRUCTION,
+  resolvePhantomToolUseRetryMode,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
@@ -2300,19 +2302,30 @@ export async function runEmbeddedPiAgent(
           // reminder simply never goes out. Resubmit the same prompt on the same
           // transcript — no tool executed, so there is no side effect to
           // duplicate — before falling through to the error path.
-          if (
-            incompleteTurnText &&
-            !aborted &&
-            !promptError &&
-            !timedOut &&
-            isPhantomToolUseTurn(sessionLastAssistant) &&
-            !attempt.replayMetadata.hadPotentialSideEffects &&
-            phantomToolUseRetries < MAX_PHANTOM_TOOL_USE_RETRIES
-          ) {
+          // 3rd reopen (2026-09-26): a phantom turn that already ran a tool
+          // (exec pre-send-check, read) used to be vetoed here by the
+          // side-effect gate and fell straight through to the withheld error
+          // — two Saturday weigh-in reminders lost, `retries=0`. That shape
+          // now CONTINUES on the same transcript with a steer instead of a
+          // resubmission (the completed tool results stand; nothing re-runs).
+          const phantomRetryMode =
+            incompleteTurnText && !aborted && !promptError && !timedOut
+              ? resolvePhantomToolUseRetryMode({
+                  lastAssistant: sessionLastAssistant,
+                  hadPotentialSideEffects: attempt.replayMetadata.hadPotentialSideEffects,
+                  retries: phantomToolUseRetries,
+                  maxRetries: MAX_PHANTOM_TOOL_USE_RETRIES,
+                })
+              : null;
+          if (phantomRetryMode) {
             phantomToolUseRetries += 1;
+            if (phantomRetryMode === "steer") {
+              reasoningOnlyRetryInstruction = PHANTOM_TOOL_USE_RETRY_INSTRUCTION;
+            }
             log.warn(
-              `[phantom-tool-use-retry] stopReason=toolUse with no tool call block; resubmitting ` +
-                `attempt=${phantomToolUseRetries}/${MAX_PHANTOM_TOOL_USE_RETRIES} ` +
+              `[phantom-tool-use-retry] stopReason=toolUse with no tool call block; ` +
+                `${phantomRetryMode === "steer" ? "continuing with steer (side-effect turn, transcript kept)" : "resubmitting"} ` +
+                `attempt=${phantomToolUseRetries}/${MAX_PHANTOM_TOOL_USE_RETRIES} mode=${phantomRetryMode} ` +
                 `provider=${sessionLastAssistant?.provider ?? provider} ` +
                 `model=${sessionLastAssistant?.model ?? model.id} ` +
                 `sessionKey=${params.sessionKey ?? params.sessionId}`,
