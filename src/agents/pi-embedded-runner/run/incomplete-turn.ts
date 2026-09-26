@@ -90,6 +90,44 @@ export function isPhantomToolUseTurn(
   });
 }
 
+/**
+ * openclaw-infra#206 (3rd reopen, 2026-09-26): two Saturday weigh-in
+ * reminders (060329, 050309) ended `phantomToolUse=true retries=0` — the
+ * resubmission never fired because the turn had already run `exec`
+ * (pre-send-check) and `read` before the model's last message came back as
+ * reasoning only, so `hadPotentialSideEffects` vetoed it. A plain
+ * resubmission is the wrong tool for that shape anyway: the completed tool
+ * results are already in the transcript, and re-running the pre-send check
+ * would trip its same-day dedup and turn the reminder into NO_REPLY. So a
+ * phantom turn with side effects continues instead — the steer rides the
+ * reasoning-only injection channel (the next attempt's prompt slot), the
+ * transcript is kept, and the model is told to use what already ran.
+ */
+export const PHANTOM_TOOL_USE_RETRY_INSTRUCTION =
+  "The previous assistant turn ended as if calling a tool, but it contained no tool call block (the call was written as text or reasoning), so nothing ran and nothing was delivered. Continue from the current state: every tool result already in this conversation stands — do NOT re-run those tools (a pre-send check that already returned SEND stays SEND). If a tool call is still needed, emit it as a real tool call now; otherwise produce the final user-visible reply now (NO_REPLY only if the checks above said not to send).";
+
+export type PhantomToolUseRetryMode = "resubmit" | "steer";
+
+/** How a phantom tool-use turn is recovered, or null when it is not one /
+ *  the retries are spent. No completed side effect → the same prompt is
+ *  resubmitted (nothing ran, nothing to duplicate). A completed side effect
+ *  (an exec / write / send earlier in the turn) → continue with the steer
+ *  above on the same transcript instead of giving up. */
+export function resolvePhantomToolUseRetryMode(params: {
+  lastAssistant?: { stopReason?: string; content?: unknown } | null;
+  hadPotentialSideEffects: boolean;
+  retries: number;
+  maxRetries: number;
+}): PhantomToolUseRetryMode | null {
+  if (!isPhantomToolUseTurn(params.lastAssistant)) {
+    return null;
+  }
+  if (params.retries >= params.maxRetries) {
+    return null;
+  }
+  return params.hadPotentialSideEffects ? "steer" : "resubmit";
+}
+
 const PLANNING_ONLY_PROMISE_RE =
   /\b(?:i(?:'ll| will)|let me|i(?:'m| am)\s+going to|first[, ]+i(?:'ll| will)|next[, ]+i(?:'ll| will)|i can do that)\b/i;
 const PLANNING_ONLY_COMPLETION_RE =
