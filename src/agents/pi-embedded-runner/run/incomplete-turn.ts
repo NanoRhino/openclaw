@@ -428,6 +428,48 @@ export type FinalTagDiscardRetryPlan =
     };
 
 /**
+ * Core tools that never change state. A final-tag-discarded turn whose tool
+ * calls are ALL in this set is still side-effect-free, so the wrap-in-<final>
+ * retry stays the right recovery for it.
+ */
+const FINAL_TAG_READ_ONLY_TOOL_NAMES = new Set([
+  "read",
+  "memory_search",
+  "memory_get",
+  "web_search",
+  "web_fetch",
+  "x_search",
+  "image",
+  "pdf",
+  "sessions_list",
+  "sessions_history",
+  "agents_list",
+]);
+
+/**
+ * Final-tag recovery only: did the attempt run a tool that may have changed
+ * state? `replayMetadata.hadPotentialSideEffects` only recognizes core tool
+ * names (tool-mutation.ts), so plugin tools such as `meal_checkin` /
+ * `exercise_checkin` never set it — a completed meal save was classified as
+ * side-effect-free and re-prompted instead of salvaged (openclaw-infra#505,
+ * 2026-09-28, agent 050171; 41/45 retries in 7 days were meal_checkin turns).
+ * Plugin tools are opaque to core, so any tool outside the known read-only set
+ * counts. Scoped to this decision: replay safety and the other recovery paths
+ * keep their own classification.
+ */
+function attemptRanPotentiallyMutatingTool(
+  toolMetas: ReadonlyArray<{ toolName: string }> | undefined,
+): boolean {
+  if (!Array.isArray(toolMetas)) {
+    return false;
+  }
+  return toolMetas.some((meta) => {
+    const name = normalizeLowercaseStringOrEmpty(meta?.toolName);
+    return name.length > 0 && !FINAL_TAG_READ_ONLY_TOOL_NAMES.has(name);
+  });
+}
+
+/**
  * One-shot recovery for a turn whose ENTIRE reply the enforceFinalTag gate
  * discarded (model wrote real content but never opened a <final> block, and no
  * messaging-tool send delivered anything). Without this the member gets pure
@@ -445,7 +487,7 @@ export type FinalTagDiscardRetryPlan =
 export function resolveFinalTagDiscardRetryInstruction(params: {
   aborted: boolean;
   timedOut: boolean;
-  attempt: IncompleteTurnAttempt;
+  attempt: IncompleteTurnAttempt & Partial<Pick<EmbeddedRunAttemptResult, "toolMetas">>;
 }): FinalTagDiscardRetryPlan | null {
   if (params.aborted || params.timedOut) {
     return null;
@@ -476,7 +518,10 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
   if (visible) {
     return null;
   }
-  if (params.attempt.replayMetadata.hadPotentialSideEffects) {
+  if (
+    params.attempt.replayMetadata.hadPotentialSideEffects ||
+    attemptRanPotentiallyMutatingTool(params.attempt.toolMetas)
+  ) {
     const salvageText = (params.attempt.finalTagDiscardedText ?? "").trim();
     if (!salvageText || isSilentReplyPayloadText(salvageText, SILENT_REPLY_TOKEN)) {
       return null;
