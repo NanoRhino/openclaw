@@ -94,6 +94,70 @@ describe("resolveFinalTagDiscardRetryInstruction", () => {
     }
   });
 
+  it("salvages a plugin-tool meal log even though replay metadata saw no side effect", () => {
+    // openclaw-infra#505 (2026-09-28, agent 050171): meal_checkin saved the
+    // meal, the untagged confirmation was eaten, and because plugin tool names
+    // are unknown to the core mutation classifier the turn was re-prompted
+    // with the wrap-in-<final> steer (41/45 retries in 7 days). A completed
+    // plugin-tool call must salvage, not re-run the model.
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        toolMetas: [{ toolName: "meal_checkin" }],
+        finalTagDiscardedText: "📝 早餐记录好啦！\n🍽 华夫饼 220千卡 + 蛋卷 160千卡 = 380千卡",
+      }),
+    });
+    expect(plan?.kind).toBe("salvage");
+    if (plan?.kind === "salvage") {
+      expect(plan.text).toBe("📝 早餐记录好啦！\n🍽 华夫饼 220千卡 + 蛋卷 160千卡 = 380千卡");
+    }
+  });
+
+  it("salvages when a plugin tool ran alongside read-only core tools", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        toolMetas: [{ toolName: "read" }, { toolName: "Exercise_Checkin" }],
+      }),
+    });
+    expect(plan?.kind).toBe("salvage");
+  });
+
+  it("keeps the retry for turns whose tools were all read-only core tools", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        toolMetas: [{ toolName: "read" }, { toolName: "memory_search" }, { toolName: "web_fetch" }],
+      }),
+    });
+    expect(plan?.kind).toBe("retry");
+  });
+
+  it("keeps the retry for tool-less turns (empty toolMetas)", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({ toolMetas: [] }),
+    });
+    expect(plan?.kind).toBe("retry");
+  });
+
+  it("plugin-tool turns end silent when no discarded text was captured", () => {
+    expect(
+      resolveFinalTagDiscardRetryInstruction({
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttempt({
+          toolMetas: [{ toolName: "meal_checkin" }],
+          finalTagDiscardedText: "NO_REPLY",
+        }),
+      }),
+    ).toBeNull();
+  });
+
   it("side-effect turns end silent when no discarded text was captured", () => {
     expect(
       resolveFinalTagDiscardRetryInstruction({
