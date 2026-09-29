@@ -2,7 +2,7 @@ let _replyFilterCfg = null;
 let _replyFilterCfgMtime = 0;
 // Bumped when the header body changes so apply.py can refresh an already-
 // injected older header in place (see refresh_header in apply.py).
-const _REPLY_FILTER_HEADER_VERSION = 39;
+const _REPLY_FILTER_HEADER_VERSION = 40;
 // v39 (2026-09-24, openclaw-infra#313 3rd reopen): meal_checkin ran and answered
 // none/noop → the engine looked and found nothing to write, which is evidence
 // the record already exists, never that "it didn't get saved". 14 days of
@@ -1845,14 +1845,30 @@ const _rfTok = (s) =>
     .trim()
     .split(" ")
     .filter((w) => w.length > 2 && !_RF_TOK_STOP.has(w) && !/^\d+$/.test(w));
+// v40 (#300 6th reopen, 050225 2026-09-29 13:40Z): "Premier Protein Shake
+// (Vanilla)" names the HEAD word of "Protein Bar (55g)" — v38 read the shake
+// row as a composite covering the shake AND the bar and rewrote the coach's
+// correct 325 g/160 to their sum 380 g/370 (the Javvy row likewise, 19/70 →
+// 74/280). Two belts: a card row whose tokens equal one record row's tokens IS
+// that row; and a word that appears in more than one record row's name
+// ("protein") is never a head that decides coverage.
 function _rfCoverRow(name, dishes) {
   const full = new Set(_rfTok(name));
+  const toks = (dishes || []).map((d) => _rfTok(d.name));
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
+    if (t.length && t.length === full.size && t.every((w) => full.has(w))) {
+      const d = dishes[i];
+      return { dishes: [d], g: d.g, kcal: d.kcal, aggregate: false };
+    }
+  }
   const heads = new Map();
-  for (const d of dishes || []) {
-    const t = _rfTok(d.name);
+  for (let i = 0; i < toks.length; i++) {
+    const t = toks[i];
     if (!t.length) continue;
     const head = t[0];
-    if (full.has(head) && !heads.has(head)) heads.set(head, d);
+    const sharedElsewhere = toks.some((o, j) => j !== i && o.includes(head));
+    if (full.has(head) && !sharedElsewhere && !heads.has(head)) heads.set(head, dishes[i]);
   }
   if (heads.size >= 2) {
     const parts = [...heads.values()];
