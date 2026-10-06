@@ -258,3 +258,58 @@ describe("resolveFinalTagDiscardRetryInstruction", () => {
     ).toBeNull();
   });
 });
+
+describe("resolveFinalTagDiscardRetryInstruction — unclosed <think> (openclaw-infra#206, 2026-10-05)", () => {
+  // 060341 09:42Z: meal_checkin ran (meals written), then the assistant opened
+  // <think>, never closed it, never opened <final>, and ran the card inside the
+  // reasoning. Visible text = "" → the plain discard flag never fired; with the
+  // new flag the only sane recovery is a steer — never a salvage of reasoning prose.
+  it("steers a retry on a side-effect turn instead of salvaging the reasoning prose", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        assistantTexts: [],
+        finalTagDiscardedText: "",
+        finalTagDiscardedUnclosedThink: true,
+        replayMetadata: { hadPotentialSideEffects: true },
+        toolMetas: [{ toolName: "meal_checkin" }],
+      }),
+    });
+    expect(plan?.kind).toBe("retry");
+    if (plan?.kind === "retry") {
+      expect(plan.instruction).toContain("never closed it");
+      expect(plan.instruction).toContain("do not call it again");
+      expect(plan.instruction).toContain("<final></final>");
+    }
+  });
+
+  it("steers the same retry on a tool-less turn (060341 09:41Z 'Skipped dinner..felt bad')", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        assistantTexts: [],
+        finalTagDiscardedText: "",
+        finalTagDiscardedUnclosedThink: true,
+      }),
+    });
+    expect(plan?.kind).toBe("retry");
+    if (plan?.kind === "retry") {
+      expect(plan.instruction).toContain("never closed it");
+    }
+  });
+
+  it("without the flag a side-effect turn with no captured text still ends silent (unchanged)", () => {
+    const plan = resolveFinalTagDiscardRetryInstruction({
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttempt({
+        assistantTexts: [],
+        finalTagDiscardedText: "",
+        replayMetadata: { hadPotentialSideEffects: true },
+      }),
+    });
+    expect(plan).toBeNull();
+  });
+});

@@ -25,6 +25,7 @@ type IncompleteTurnAttempt = Pick<
   | "assistantTexts"
   | "finalTagDiscardedEntireReply"
   | "finalTagDiscardedText"
+  | "finalTagDiscardedUnclosedThink"
   | "clientToolCall"
   | "currentAttemptAssistant"
   | "yieldDetected"
@@ -107,6 +108,17 @@ export const PHANTOM_TOOL_USE_RETRY_INSTRUCTION =
   "The previous assistant turn ended as if calling a tool, but it contained no tool call block (the call was written as text or reasoning), so nothing ran and nothing was delivered. Continue from the current state: every tool result already in this conversation stands — do NOT re-run those tools (a pre-send check that already returned SEND stays SEND). If a tool call is still needed, emit it as a real tool call now; otherwise produce the final user-visible reply now (NO_REPLY only if the checks above said not to send).";
 
 export type PhantomToolUseRetryMode = "resubmit" | "steer";
+
+/** openclaw-infra#206 (2026-10-05): the reply was written inside an unclosed
+ *  <think> and never reached <final>; the whole thing was treated as reasoning
+ *  and the member got nothing. Steer on the same transcript — tool results
+ *  (the meal write) already stand, so nothing is re-run. */
+export const UNCLOSED_THINK_RETRY_INSTRUCTION =
+  "Your previous reply opened <think> and never closed it, and it never opened <final> — " +
+  "everything you wrote was treated as internal reasoning and the user received NOTHING. " +
+  "Any tool you called already ran and its results are above; do not call it again. " +
+  "Write the reply to the user again now: close reasoning with </think> (or skip it), then put " +
+  "the complete user-facing reply inside <final></final>. Only text inside <final> is delivered.";
 
 /** How a phantom tool-use turn is recovered, or null when it is not one /
  *  the retries are spent. No completed side effect → the same prompt is
@@ -517,6 +529,14 @@ export function resolveFinalTagDiscardRetryInstruction(params: {
     .trim();
   if (visible) {
     return null;
+  }
+  // Unclosed <think> swallowed the reply (openclaw-infra#206, 2026-10-05,
+  // 060341 × 2): the discarded text is reasoning prose fused with the card,
+  // so there is nothing to salvage on a side-effect turn either — the only
+  // recovery is a steer on the same transcript (the tool results stand; the
+  // meals were already written). Same channel the phantom-tool-use steer uses.
+  if (params.attempt.finalTagDiscardedUnclosedThink === true) {
+    return { kind: "retry", instruction: UNCLOSED_THINK_RETRY_INSTRUCTION };
   }
   if (
     params.attempt.replayMetadata.hadPotentialSideEffects ||

@@ -62,6 +62,12 @@ export type EmbeddedPiSubscribeState = {
    * runner salvages this text as the reply payload instead — it still passes
    * the reply filter on the deliver path (2026-07-30 incident). */
   finalTagDiscardedText?: string;
+  /** The reply was swallowed by an UNCLOSED <think> (no </think>, no <final>):
+   * the visible-text extractor saw nothing at all, so the plain discard flag
+   * never fired and the turn ended as a withheld error (openclaw-infra#206,
+   * 2026-10-05, 060341 × 2: the member-facing card sat inside the think
+   * prose). Nothing in it is salvageable — the runner steers one retry. */
+  finalTagDiscardedUnclosedThink?: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
   lastAssistantTextMessageIndex: number;

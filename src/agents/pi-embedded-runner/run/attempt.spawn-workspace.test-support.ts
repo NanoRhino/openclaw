@@ -86,6 +86,8 @@ export function createSubscriptionMock(): SubscriptionMock {
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
     unsubscribe: () => {},
     wasFinalTagEntireReplyDiscarded: () => false,
+    getFinalTagDiscardedText: () => undefined,
+    wasFinalTagDiscardedByUnclosedThink: () => false,
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
     getMessagingToolSentTexts: () => [] as string[],

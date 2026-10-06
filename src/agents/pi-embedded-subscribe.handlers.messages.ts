@@ -712,12 +712,41 @@ export function handleMessageEnd(
   // createOutboundPayloadPlan). A genuinely empty reply (model produced no
   // visible text at all) still surfaces the incomplete-turn error — that signal
   // stays for real failures.
-  const discardedEntireReply =
+  let discardedEntireReply =
     ctx.params.enforceFinalTag === true &&
     strippedVisibleText.trim().length === 0 &&
     rawVisibleText.trim().length > 0;
   const discardedSilentSentinel =
     discardedEntireReply && isSilentReplyPayloadText(rawVisibleText, SILENT_REPLY_TOKEN);
+  // Unclosed <think> (openclaw-infra#206, 2026-10-05, agent 060341 × 2):
+  // claude-sonnet-5-5 opened <think>, never closed it and never opened
+  // <final>, and ran its reasoning straight into the member-facing card. The
+  // visible-text extractor treats everything after the open tag as reasoning,
+  // so rawVisibleText is EMPTY here, the discard flag above never fires, and
+  // the turn fell through to the withheld incomplete-turn error — the member
+  // got the ACK and nothing else while the meals had already been written.
+  // Flag it as a total discard with NOTHING salvageable (the text is reasoning
+  // prose); the runner steers one retry on the same transcript.
+  if (
+    ctx.params.enforceFinalTag === true &&
+    !discardedEntireReply &&
+    strippedVisibleText.trim().length === 0 &&
+    rawVisibleText.trim().length === 0
+  ) {
+    const unsanitized = rawAssistantContentText(assistantMessage) ?? "";
+    if (isReplySwallowedByUnclosedThink(unsanitized)) {
+      discardedEntireReply = true;
+      ctx.state.finalTagDiscardedEntireReply = true;
+      ctx.state.finalTagDiscardedText = "";
+      ctx.state.finalTagDiscardedUnclosedThink = true;
+      ctx.log.warn(
+        `[final-tag] reply swallowed by an unclosed <think> (no </think>, no <final>) ` +
+          `agentId=${ctx.params.agentId ?? "unknown"} ` +
+          `sessionKey=${ctx.params.sessionKey ?? "unknown"} ` +
+          `runId=${ctx.params.runId} chars=${unsanitized.length}`,
+      );
+    }
+  }
   // Canary: the enforceFinalTag gate discarded real content because the model
   // never opened a <final> tag. Warn (without the content, which may contain
   // user data) so rollout can watch the over-suppression rate. A discarded
@@ -961,4 +990,30 @@ export function handleMessageEnd(
 
   finalizeMessageEnd();
   return undefined;
+}
+
+const UNCLOSED_THINK_OPEN_RE =
+  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+const THINK_CLOSE_RE = /<\s*\/\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+const FINAL_OPEN_RE = /<\s*final\b[^<>]*>/i;
+
+/** The raw assistant text opens with a reasoning tag that is never closed and
+ *  never reaches <final> — the model fused its reasoning and the user-facing
+ *  reply into one untagged run (openclaw-infra#206, 2026-10-05). Exported for
+ *  tests. */
+export function isReplySwallowedByUnclosedThink(rawText: string): boolean {
+  const text = String(rawText ?? "");
+  if (!text.trim()) {
+    return false;
+  }
+  if (!UNCLOSED_THINK_OPEN_RE.test(text)) {
+    return false;
+  }
+  if (THINK_CLOSE_RE.test(text) || FINAL_OPEN_RE.test(text)) {
+    return false;
+  }
+  // Reasoning alone is a legitimate (if useless) reply shape handled by the
+  // reasoning-only retry; the shape this catches carries real prose after the
+  // reasoning — require more than a short think stub.
+  return text.replace(UNCLOSED_THINK_OPEN_RE, "").trim().length >= 40;
 }
