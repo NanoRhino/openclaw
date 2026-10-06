@@ -76,6 +76,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const initialPendingToolMediaUrls = collectPendingMediaFromInternalEvents(params.internalEvents);
   const state: EmbeddedPiSubscribeState = {
     finalTagDiscardedEntireReply: false,
+    finalTagDiscardedUnclosedThink: false,
     assistantTexts: [],
     toolMetas: [],
     toolMetaById: new Map(),
@@ -853,6 +854,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     unsubscribe,
     wasFinalTagEntireReplyDiscarded: () => state.finalTagDiscardedEntireReply === true,
     getFinalTagDiscardedText: () => state.finalTagDiscardedText,
+    wasFinalTagDiscardedByUnclosedThink: () => state.finalTagDiscardedUnclosedThink === true,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
       livenessState?: EmbeddedRunLivenessState;

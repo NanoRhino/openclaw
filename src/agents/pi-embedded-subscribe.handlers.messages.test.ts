@@ -11,6 +11,7 @@ import {
   hasAssistantVisibleReply,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
+  isReplySwallowedByUnclosedThink,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
@@ -966,5 +967,40 @@ describe("handleMessageEnd", () => {
       expect.objectContaining({ text: "NO_REPLY" }),
     );
     expect(ctx.log.warn as unknown as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+  });
+});
+
+describe("isReplySwallowedByUnclosedThink (openclaw-infra#206, 2026-10-05)", () => {
+  // The two 060341 replies, shape-faithful: <think> opened, never closed, no <final>,
+  // reasoning running straight into the member-facing text.
+  const dinner =
+    '<think>The user says "Skipped dinner..felt bad". Likely about last night (Sunday). Should I log? Skipped dinner = nothing eaten. Keep it warm.Thanks for telling me. Skipping one dinner is fine, and I won\'t log anything for last night. Did you feel bad physically, like nausea or pain, or just down about it?';
+  const card =
+    "<think>Planned meals (eaten:false) logged. Tag as planned. Protein 59 of 113. Keep short.📝 Today's plan logged! (planned, counted)\n· Protein shake — 151 kcal\n📊 So far today: 🔥 1,031/1,525 kcal";
+  it("recognises both prod shapes", () => {
+    expect(isReplySwallowedByUnclosedThink(dinner)).toBe(true);
+    expect(isReplySwallowedByUnclosedThink(card)).toBe(true);
+    expect(
+      isReplySwallowedByUnclosedThink(
+        "<thinking>long reasoning that never ends and then the actual answer to the member here</thinking".replace(
+          "</thinking",
+          "",
+        ),
+      ),
+    ).toBe(true);
+  });
+  it("stands down for a closed think, a present <final>, a short stub, or no think at all", () => {
+    expect(
+      isReplySwallowedByUnclosedThink("<think>brief</think>\n<final>Logged — 151 kcal.</final>"),
+    ).toBe(false);
+    expect(
+      isReplySwallowedByUnclosedThink(
+        "<think>brief reasoning here<final>Logged — 151 kcal.</final>",
+      ),
+    ).toBe(false);
+    expect(isReplySwallowedByUnclosedThink("<think>ok")).toBe(false);
+    expect(isReplySwallowedByUnclosedThink("Logged — 151 kcal. Nice start.")).toBe(false);
+    expect(isReplySwallowedByUnclosedThink("")).toBe(false);
+    expect(isReplySwallowedByUnclosedThink("NO_REPLY")).toBe(false);
   });
 });

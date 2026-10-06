@@ -94,6 +94,9 @@ export type EmbeddedRunAttemptResult = {
    * Bedrock rejects tool-bearing transcripts without toolConfig, and a
    * resubmission with tools could repeat the mutation). */
   finalTagDiscardedText?: string;
+  /** The discard was an UNCLOSED <think> swallowing the whole reply
+   * (openclaw-infra#206, 2026-10-05): nothing salvageable, steer one retry. */
+  finalTagDiscardedUnclosedThink?: boolean;
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;
