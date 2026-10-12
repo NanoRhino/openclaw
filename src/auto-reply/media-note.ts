@@ -197,19 +197,29 @@ const PENDING_HANDOFF_FILE = "data/pending-handoff-images.json";
 export type PendingHandoffImage = { path: string; mime?: string };
 
 export function readPendingHandoffImages(workspaceDir: string | undefined): PendingHandoffImage[] {
-  if (!workspaceDir || !workspaceDir.trim()) return [];
+  if (!workspaceDir || !workspaceDir.trim()) {
+    return [];
+  }
   const file = path.join(workspaceDir, PENDING_HANDOFF_FILE);
   try {
-    if (!fs.existsSync(file)) return [];
+    if (!fs.existsSync(file)) {
+      return [];
+    }
     const raw = fs.readFileSync(file, "utf-8");
     const parsed = JSON.parse(raw) as { images?: unknown };
-    if (!Array.isArray(parsed.images)) return [];
+    if (!Array.isArray(parsed.images)) {
+      return [];
+    }
     return parsed.images
-      .map((e) => {
-        if (!e || typeof e !== "object") return undefined;
+      .map((e): PendingHandoffImage | undefined => {
+        if (!e || typeof e !== "object") {
+          return undefined;
+        }
         const p = (e as { path?: unknown }).path;
         const m = (e as { mime?: unknown }).mime;
-        if (typeof p !== "string" || !p.trim()) return undefined;
+        if (typeof p !== "string" || !p.trim()) {
+          return undefined;
+        }
         return { path: p.trim(), mime: typeof m === "string" ? m.trim() : undefined };
       })
       .filter((e): e is PendingHandoffImage => Boolean(e));
@@ -219,10 +229,14 @@ export function readPendingHandoffImages(workspaceDir: string | undefined): Pend
 }
 
 export function clearPendingHandoffImages(workspaceDir: string | undefined): void {
-  if (!workspaceDir || !workspaceDir.trim()) return;
+  if (!workspaceDir || !workspaceDir.trim()) {
+    return;
+  }
   const file = path.join(workspaceDir, PENDING_HANDOFF_FILE);
   try {
-    if (!fs.existsSync(file)) return;
+    if (!fs.existsSync(file)) {
+      return;
+    }
     const tmp = `${file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify({ images: [] }, null, 2));
     fs.renameSync(tmp, file);
@@ -239,11 +253,11 @@ export function clearPendingHandoffImages(workspaceDir: string | undefined): voi
  * text-side reading knows the image came from the human coach during the handoff,
  * not from the user this turn.
  */
-export function buildPendingHandoffMediaNote(
-  workspaceDir: string | undefined,
-): string | undefined {
+export function buildPendingHandoffMediaNote(workspaceDir: string | undefined): string | undefined {
   const pending = readPendingHandoffImages(workspaceDir);
-  if (pending.length === 0) return undefined;
+  if (pending.length === 0) {
+    return undefined;
+  }
   // 复用 formatMediaAttachedLine,但 prefix 改为 Handoff;detectImageReferences 仍能识别
   // (它的正则 `\[media attached:` 在 pi-embedded-runner/run/images.ts 已被 detect)。
   // 为兼容,直接用同款 [media attached: ...] 格式,在前面单独加一行 context 说明来源。
